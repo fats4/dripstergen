@@ -1,0 +1,13 @@
+node_modules
+dist
+.DS_Store
+*.local
+
+# Secrets & local env
+.env
+
+# IPFS upload staging
+ipfs-upload/
+
+# Assets served from IPFS in production (keep locally for dev)
+public/traits/
