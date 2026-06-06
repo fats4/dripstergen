@@ -30,6 +30,8 @@ jobs:
       - run: npm run build
         env:
           GH_PAGES: "true"
+          # "/" for custom domain at root; "/dripstergen/" for *.github.io/dripstergen/
+          GH_PAGES_BASE: ${{ vars.GH_PAGES_BASE || '/' }}
           VITE_IPFS_CID: ${{ secrets.VITE_IPFS_CID }}
           VITE_IPFS_GATEWAY: ${{ secrets.VITE_IPFS_GATEWAY }}
 

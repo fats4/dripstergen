@@ -86,8 +86,13 @@ function traitsPublicScanPlugin() {
   };
 }
 
-/** GitHub Pages project site: https://<user>.github.io/dripstergen/ */
-const GH_PAGES_BASE = "/dripstergen/";
+/**
+ * GitHub Pages base path.
+ * - Custom domain (root):  "/"           e.g. https://gen.dripster.xyz/
+ * - Project site:          "/dripstergen/" e.g. https://user.github.io/dripstergen/
+ * Override via GH_PAGES_BASE in CI or: GH_PAGES_BASE=/ npm run build:pages
+ */
+const GH_PAGES_BASE = (process.env.GH_PAGES_BASE ?? "/dripstergen/").trim() || "/";
 
 export default defineConfig({
   base: process.env.GH_PAGES === "true" ? GH_PAGES_BASE : "/",
