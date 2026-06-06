@@ -5,6 +5,7 @@ dist
 
 # Secrets & local env
 .env
+.env.local
 
 # IPFS upload staging
 ipfs-upload/

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+import { r2DevProxyPlugin } from "./scripts/r2-dev-proxy-plugin.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -98,7 +99,7 @@ export default defineConfig({
   base: process.env.GH_PAGES === "true" ? GH_PAGES_BASE : "/",
   root: ".",
   publicDir: "public",
-  plugins: [traitsPublicScanPlugin()],
+  plugins: [r2DevProxyPlugin(__dirname), traitsPublicScanPlugin()],
   server: {
     /** Access via ngrok / tunnel (Host header changes per URL) */
     host: true,

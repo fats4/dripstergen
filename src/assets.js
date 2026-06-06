@@ -11,7 +11,7 @@
  * Empty = same origin (`/traits/...` from public/ or dist/).
  *
  * Note: browsers cannot load `ipfs://` directly — always use an HTTPS gateway.
- * Download PNG needs a gateway with CORS (Pinata, w3s.link, Cloudflare dweb.link).
+ * Download PNG needs CORS on the asset host (R2: scripts/r2-cors.json, IPFS: gateway with CORS).
  */
 
 /** @type {string} */
