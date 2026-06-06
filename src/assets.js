@@ -57,13 +57,19 @@ function joinAssetPath(path) {
   return `${ASSETS_BASE}${clean}`;
 }
 
-/** @returns {string} */
+/**
+ * Trait catalog JSON is baked into Pages deploy (see deploy.yml).
+ * Cross-origin fetch to R2 needs CORS; same-origin avoids an extra bucket setting.
+ * @returns {string}
+ */
 export function traitsManifestUrl() {
+  if (usesRemoteAssets()) return "/traits/manifest.json";
   return joinAssetPath("/traits/manifest.json");
 }
 
 /** @returns {string} */
 export function traitsScanUrl() {
+  if (usesRemoteAssets()) return "/traits/_scan.json";
   return joinAssetPath("/traits/_scan.json");
 }
 

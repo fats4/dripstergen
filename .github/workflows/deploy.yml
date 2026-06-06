@@ -45,6 +45,15 @@ jobs:
           VITE_IPFS_CID: ${{ secrets.VITE_IPFS_CID }}
           VITE_IPFS_GATEWAY: ${{ secrets.VITE_IPFS_GATEWAY }}
 
+      - name: Bake trait catalog into dist (same-origin, no R2 CORS on JSON)
+        env:
+          VITE_ASSETS_BASE_URL: ${{ secrets.VITE_ASSETS_BASE_URL }}
+        run: |
+          if [ -z "$VITE_ASSETS_BASE_URL" ]; then echo "skip catalog bake"; exit 0; fi
+          mkdir -p dist/traits
+          curl -fsSL "$VITE_ASSETS_BASE_URL/traits/_scan.json" -o dist/traits/_scan.json
+          node -e "const j=require('./dist/traits/_scan.json');console.log('catalog',Object.fromEntries(Object.entries(j).map(([k,v])=>[k,v.length])))"
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

@@ -5,18 +5,29 @@ const inFlight = new Map();
 
 /**
  * @param {string} url
+ * @param {boolean} [useCors]
  * @returns {Promise<HTMLImageElement>}
  */
-export function loadImageElement(url) {
+function loadImageElementOnce(url, useCors) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    if (assetNeedsCrossOrigin(url)) {
-      img.crossOrigin = "anonymous";
-    }
+    if (useCors) img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
     img.src = url;
   });
+}
+
+/**
+ * Try CORS first (for Download PNG). Fall back without CORS so thumbs/preview work
+ * when R2 bucket CORS is not configured yet.
+ * @param {string} url
+ * @returns {Promise<HTMLImageElement>}
+ */
+export function loadImageElement(url) {
+  const wantsCors = assetNeedsCrossOrigin(url);
+  if (!wantsCors) return loadImageElementOnce(url, false);
+  return loadImageElementOnce(url, true).catch(() => loadImageElementOnce(url, false));
 }
 
 export class LruImageCache {

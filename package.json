@@ -11,7 +11,15 @@
     "optimize-traits:replace": "node scripts/optimize-traits.mjs --replace",
     "build:assets-manifest": "node scripts/build-assets-manifest.mjs",
     "prepare:ipfs": "node scripts/prepare-ipfs-upload.mjs",
+    "prepare:ipfs:update": "node scripts/prepare-ipfs-upload.mjs --from=update",
+    "restore:update": "node scripts/restore-update-from-dist.mjs",
+    "sanitize:traits": "node scripts/sanitize-trait-filenames.mjs --root=update/traits",
+    "optimize:update": "node scripts/optimize-traits.mjs --root=update/traits --replace",
+    "upload:pinata": "node scripts/upload-pinata.mjs",
     "upload:r2": "node scripts/upload-r2.mjs",
+    "apply:r2-cors": "node scripts/apply-r2-cors.mjs",
+    "apply:update": "node scripts/apply-update.mjs",
+    "remove:update": "node scripts/remove-applied-update.mjs",
     "build:pages": "GH_PAGES=true vite build"
   },
   "devDependencies": {
