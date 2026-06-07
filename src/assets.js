@@ -57,9 +57,20 @@ export function categoryAssetUrl(category, filename) {
   const name = filename.replace(/^\//, "");
   if (name.startsWith("http://") || name.startsWith("https://")) return name;
   if (name.startsWith("/")) return joinAssetPath(name);
-  const rel = `/traits/${category}/${name}`;
-  if (usesRemoteAssets()) return `${TRAITS_PROXY_PREFIX}${rel}`;
-  return joinAssetPath(rel);
+  return joinAssetPath(`/traits/${category}/${name}`);
+}
+
+/**
+ * Same-origin proxy path — for canvas export only (service worker fetches from R2).
+ * @param {string} assetUrl
+ * @returns {string}
+ */
+export function toTraitsProxyUrl(assetUrl) {
+  if (!usesRemoteAssets() || !assetUrl) return assetUrl;
+  const marker = "/traits/";
+  const idx = assetUrl.indexOf(marker);
+  if (idx === -1) return assetUrl;
+  return `${TRAITS_PROXY_PREFIX}${assetUrl.slice(idx)}`;
 }
 
 /**

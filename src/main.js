@@ -6,6 +6,7 @@ import {
   stickerThumbUrl,
   traitsManifestUrl,
   traitsScanUrl,
+  toTraitsProxyUrl,
   usesRemoteAssets,
 } from "./assets.js";
 import { getCachedImage, LruImageCache } from "./image-cache.js";
@@ -44,6 +45,8 @@ const THUMB_PAINT_CACHE_MAX = 600;
 const VIRTUAL_THUMB_THRESHOLD = 60;
 
 const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
+/** Proxy URLs for export only — same-origin via service worker. */
+const exportImageCache = new LruImageCache(IMAGE_CACHE_MAX);
 
 /** @type {Map<string, { sx: number; sy: number; sw: number; sh: number } | null>} */
 const thumbBoundsCache = new Map();
@@ -848,8 +851,15 @@ function getInitialTheme() {
  * @param {Selection} sel
  * @param {LruImageCache} [cache]
  * @param {HTMLImageElement | null} [stickerImg]
+ * @param {(cat: CategoryKey, index: number) => string | null} [resolveUrl]
  */
-function drawComposite(ctx, sel, cache = imageCache, stickerImg = activeStickerImage) {
+function drawComposite(
+  ctx,
+  sel,
+  cache = imageCache,
+  stickerImg = activeStickerImage,
+  resolveUrl = traitFullUrl,
+) {
   ctx.clearRect(0, 0, PREVIEW, PREVIEW);
 
   const hasCustomBg = isCustomBackgroundIndex(sel.background);
@@ -869,7 +879,7 @@ function drawComposite(ctx, sel, cache = imageCache, stickerImg = activeStickerI
       ctx.fillRect(0, 0, PREVIEW, PREVIEW);
       continue;
     }
-    const url = traitFullUrl(key, sel[key]);
+    const url = resolveUrl(key, sel[key]);
     const img = url ? cache.get(url) : undefined;
     if (img) {
       ctx.drawImage(img, 0, 0, PREVIEW, PREVIEW);
@@ -880,24 +890,45 @@ function drawComposite(ctx, sel, cache = imageCache, stickerImg = activeStickerI
 }
 
 /**
+ * @param {CategoryKey} cat
+ * @param {number} pickerIndex
+ * @returns {string | null}
+ */
+function traitProxyUrl(cat, pickerIndex) {
+  const full = traitFullUrl(cat, pickerIndex);
+  return full ? toTraitsProxyUrl(full) : null;
+}
+
+/**
+ * @param {number} pickerIndex
+ * @returns {string | null}
+ */
+function stickerProxyUrl(pickerIndex) {
+  const full = stickerFullUrl(pickerIndex);
+  return full ? toTraitsProxyUrl(full) : null;
+}
+
+/**
  * @param {Selection} sel
+ * @param {LruImageCache} cache
+ * @param {(cat: CategoryKey, index: number) => string | null} resolveUrl
  * @returns {{ expected: number; loaded: number }}
  */
-function countLoadedLayers(sel) {
+function countLoadedLayersInCache(sel, cache, resolveUrl) {
   let expected = 0;
   let loaded = 0;
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
-    const url = traitFullUrl(key, sel[key]);
+    const url = resolveUrl(key, sel[key]);
     if (!url) continue;
     expected += 1;
-    if (imageCache.get(url)?.naturalWidth) loaded += 1;
+    if (cache.get(url)?.naturalWidth) loaded += 1;
   }
   if (stickerOverlay.index > 0) {
-    const url = stickerFullUrl(stickerOverlay.index);
+    const url = stickerProxyUrl(stickerOverlay.index);
     if (url) {
       expected += 1;
-      if (activeStickerImage?.naturalWidth) loaded += 1;
+      if (cache.get(url)?.naturalWidth) loaded += 1;
     }
   }
   return { expected, loaded };
@@ -906,15 +937,55 @@ function countLoadedLayers(sel) {
 /**
  * @returns {Promise<void>}
  */
-async function registerTraitsProxySw() {
+async function ensureTraitsProxyReady() {
   if (!usesRemoteAssets() || !("serviceWorker" in navigator)) return;
+  const swUrl = `${import.meta.env.BASE_URL}sw-traits-proxy.js`;
+  await navigator.serviceWorker.register(swUrl);
+  await navigator.serviceWorker.ready;
+  if (navigator.serviceWorker.controller) return;
+  await new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error("service worker not controlling")), 4000);
+    navigator.serviceWorker.addEventListener(
+      "controllerchange",
+      () => {
+        window.clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+/**
+ * @param {Selection} sel
+ * @returns {Promise<HTMLImageElement | null>}
+ */
+async function loadExportStickerImage() {
+  if (stickerOverlay.index <= 0) return null;
+  const url = stickerProxyUrl(stickerOverlay.index);
+  if (!url) return null;
   try {
-    const swUrl = `${import.meta.env.BASE_URL}sw-traits-proxy.js`;
-    await navigator.serviceWorker.register(swUrl);
-    await navigator.serviceWorker.ready;
-  } catch (err) {
-    console.warn("[traits-proxy] service worker failed", err);
+    return await getCachedImage(exportImageCache, url);
+  } catch {
+    return null;
   }
+}
+
+/**
+ * @param {Selection} sel
+ * @returns {Promise<void>}
+ */
+async function prefetchExportLayers(sel = selection) {
+  /** @type {string[]} */
+  const urls = [];
+  for (const key of COMPOSITE_ORDER) {
+    if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
+    const url = traitProxyUrl(key, sel[key]);
+    if (url) urls.push(url);
+  }
+  await Promise.all(
+    urls.map((url) => getCachedImage(exportImageCache, url).catch(() => null)),
+  );
 }
 
 async function renderPreview() {
@@ -1611,12 +1682,15 @@ async function downloadPng() {
   btnDownload.textContent = "Exporting…";
 
   try {
-    await prefetchSelectionLayers();
-    if (stickerOverlay.index > 0) {
-      await refreshActiveStickerImage();
-    }
+    await ensureTraitsProxyReady();
+    await prefetchExportLayers();
+    const stickerImg = await loadExportStickerImage();
 
-    const { expected, loaded } = countLoadedLayers(selection);
+    const { expected, loaded } = countLoadedLayersInCache(
+      selection,
+      exportImageCache,
+      traitProxyUrl,
+    );
     if (expected > 0 && loaded === 0) {
       throw new Error("no layers loaded");
     }
@@ -1627,7 +1701,7 @@ async function downloadPng() {
     const ctx = exportCanvas.getContext("2d");
     if (!ctx) throw new Error("no 2d context");
 
-    drawComposite(ctx, selection);
+    drawComposite(ctx, selection, exportImageCache, stickerImg, traitProxyUrl);
 
     const blob = await new Promise((resolve) => {
       exportCanvas.toBlob(resolve, "image/png");
@@ -1781,7 +1855,6 @@ function applyInitialState() {
 }
 
 async function init() {
-  await registerTraitsProxySw();
   loadStoredCustomBackgroundColor();
   try {
     await Promise.all([loadTraitCatalog(), loadStickerCatalog()]);
