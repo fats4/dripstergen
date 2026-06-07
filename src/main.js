@@ -478,7 +478,12 @@ function getThumbGridMetrics() {
     const parsed = Number.parseFloat(style.rowGap || style.gap);
     if (Number.isFinite(parsed)) gap = parsed;
   }
-  const cell = (width - gap * (cols - 1)) / cols;
+  let cell = (width - gap * (cols - 1)) / cols;
+  const sample = thumbGrid?.querySelector(".thumb");
+  if (sample) {
+    const h = sample.getBoundingClientRect().height;
+    if (h > 0) cell = h;
+  }
   return { cols, gap, cell, rowHeight: cell + gap };
 }
 
