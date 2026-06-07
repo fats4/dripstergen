@@ -45,6 +45,14 @@ jobs:
           VITE_IPFS_CID: ${{ secrets.VITE_IPFS_CID }}
           VITE_IPFS_GATEWAY: ${{ secrets.VITE_IPFS_GATEWAY }}
 
+      - name: Verify export service worker in dist
+        env:
+          VITE_ASSETS_BASE_URL: ${{ secrets.VITE_ASSETS_BASE_URL }}
+        run: |
+          if [ -z "$VITE_ASSETS_BASE_URL" ]; then echo "skip sw check"; exit 0; fi
+          test -f dist/traits-sw.json
+          node -e "const m=require('./dist/traits-sw.json');const fs=require('fs');if(!fs.existsSync('dist/'+m.url))process.exit(1);console.log('export sw',m.url)"
+
       - name: Bake trait catalog into dist (same-origin, no R2 CORS on JSON)
         env:
           VITE_ASSETS_BASE_URL: ${{ secrets.VITE_ASSETS_BASE_URL }}

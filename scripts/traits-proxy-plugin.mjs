@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -104,7 +105,17 @@ function proxyFetch(remote, pathname) {
       const base = assetsBase();
       if (!base) return;
       const outDir = outputOptions.dir ?? path.join(projectRoot, "dist");
-      fs.writeFileSync(path.join(outDir, "sw-traits-proxy.js"), swSource(base), "utf8");
+      const content = swSource(base);
+      const hash = createHash("sha256").update(content).digest("hex").slice(0, 12);
+      const filename = `sw-traits-proxy.${hash}.js`;
+      fs.writeFileSync(path.join(outDir, filename), content, "utf8");
+      fs.writeFileSync(
+        path.join(outDir, "traits-sw.json"),
+        JSON.stringify({ url: filename, v: hash }),
+        "utf8",
+      );
+      const legacy = path.join(outDir, "sw-traits-proxy.js");
+      if (fs.existsSync(legacy)) fs.unlinkSync(legacy);
     },
   };
 }

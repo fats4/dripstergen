@@ -9,7 +9,7 @@ import {
   usesRemoteAssets,
 } from "./assets.js";
 import { getCachedImage, LruImageCache } from "./image-cache.js";
-import { loadExportTraitImage } from "./traits-export.js";
+import { ensureExportWorkerReady, loadExportTraitImage } from "./traits-export.js";
 import {
   CATEGORY_KEYS,
   COMPOSITE_ORDER,
@@ -1639,6 +1639,7 @@ async function downloadPng() {
   btnDownload.textContent = "Exporting…";
 
   try {
+    await ensureExportWorkerReady();
     await prefetchExportLayers();
     const stickerImg = await loadExportStickerImage();
 
@@ -1808,6 +1809,9 @@ function applyInitialState() {
 }
 
 async function init() {
+  if (usesRemoteAssets()) {
+    ensureExportWorkerReady().catch((err) => console.warn("[traits-export]", err));
+  }
   loadStoredCustomBackgroundColor();
   try {
     await Promise.all([loadTraitCatalog(), loadStickerCatalog()]);
