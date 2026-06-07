@@ -45,8 +45,6 @@ const THUMB_PAINT_CACHE_MAX = 600;
 const VIRTUAL_THUMB_THRESHOLD = 60;
 
 const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
-/** Proxy URLs for export only — same-origin via service worker. */
-const exportImageCache = new LruImageCache(IMAGE_CACHE_MAX);
 
 /** @type {Map<string, { sx: number; sy: number; sw: number; sh: number } | null>} */
 const thumbBoundsCache = new Map();
@@ -915,34 +913,32 @@ function countLoadedLayersInCache(sel, cache) {
 }
 
 /**
- * @returns {Promise<HTMLImageElement | null>}
- */
-async function loadExportStickerImage() {
-  if (stickerOverlay.index <= 0) return null;
-  const url = stickerFullUrl(stickerOverlay.index);
-  if (!url) return null;
-  try {
-    return await loadExportTraitImage(exportImageCache, url);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * @param {Selection} sel
+ * Reload selected layers with CORS into imageCache so export matches preview.
+ * @param {Selection} [sel]
  * @returns {Promise<void>}
  */
-async function prefetchExportLayers(sel = selection) {
-  /** @type {string[]} */
-  const urls = [];
+async function ensureCorsLayersForExport(sel = selection) {
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
     const url = traitFullUrl(key, sel[key]);
-    if (url) urls.push(url);
+    if (!url) continue;
+    try {
+      await loadExportTraitImage(imageCache, url);
+    } catch {
+      /* layer skipped */
+    }
   }
-  await Promise.all(
-    urls.map((url) => loadExportTraitImage(exportImageCache, url).catch(() => null)),
-  );
+  if (stickerOverlay.index > 0) {
+    const url = stickerFullUrl(stickerOverlay.index);
+    if (url) {
+      try {
+        const img = await loadExportTraitImage(imageCache, url);
+        activeStickerImage = img;
+      } catch {
+        activeStickerImage = null;
+      }
+    }
+  }
 }
 
 async function renderPreview() {
@@ -1639,10 +1635,9 @@ async function downloadPng() {
   btnDownload.textContent = "Exporting…";
 
   try {
-    await prefetchExportLayers();
-    const stickerImg = await loadExportStickerImage();
+    await ensureCorsLayersForExport();
 
-    const { expected, loaded } = countLoadedLayersInCache(selection, exportImageCache);
+    const { expected, loaded } = countLoadedLayersInCache(selection, imageCache);
     if (expected > 0 && loaded === 0) {
       throw new Error("no layers loaded");
     }
@@ -1653,7 +1648,7 @@ async function downloadPng() {
     const ctx = exportCanvas.getContext("2d");
     if (!ctx) throw new Error("no 2d context");
 
-    drawComposite(ctx, selection, exportImageCache, stickerImg);
+    drawComposite(ctx, selection, imageCache, activeStickerImage);
 
     const blob = await new Promise((resolve) => {
       exportCanvas.toBlob(resolve, "image/png");
