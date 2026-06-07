@@ -8,7 +8,7 @@ const inFlight = new Map();
  * @param {boolean} [useCors]
  * @returns {Promise<HTMLImageElement>}
  */
-function loadImageElementOnce(url, useCors) {
+export function loadImageElementOnce(url, useCors) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     if (useCors) img.crossOrigin = "anonymous";

@@ -9,7 +9,7 @@ import {
   usesRemoteAssets,
 } from "./assets.js";
 import { getCachedImage, LruImageCache } from "./image-cache.js";
-import { ensureExportWorkerReady, loadExportTraitImage } from "./traits-export.js";
+import { exportCorsSetupMessage, loadExportTraitImage } from "./traits-export.js";
 import {
   CATEGORY_KEYS,
   COMPOSITE_ORDER,
@@ -1639,7 +1639,6 @@ async function downloadPng() {
   btnDownload.textContent = "Exporting…";
 
   try {
-    await ensureExportWorkerReady();
     await prefetchExportLayers();
     const stickerImg = await loadExportStickerImage();
 
@@ -1671,10 +1670,11 @@ async function downloadPng() {
     URL.revokeObjectURL(url);
   } catch (err) {
     console.error("[download]", err);
-    window.alert(
-      "Download gagal — gambar trait belum termuat.\n\n" +
-        "Refresh halaman (Cmd+Shift+R) lalu coba lagi.",
-    );
+    const msg =
+      err instanceof Error && err.message === "cors_required"
+        ? exportCorsSetupMessage()
+        : "Download gagal — gambar trait belum termuat.\n\nRefresh halaman (Cmd+Shift+R) lalu coba lagi.";
+    window.alert(msg);
   } finally {
     btnDownload.disabled = false;
     btnDownload.textContent = label;
@@ -1809,9 +1809,6 @@ function applyInitialState() {
 }
 
 async function init() {
-  if (usesRemoteAssets()) {
-    ensureExportWorkerReady().catch((err) => console.warn("[traits-export]", err));
-  }
   loadStoredCustomBackgroundColor();
   try {
     await Promise.all([loadTraitCatalog(), loadStickerCatalog()]);

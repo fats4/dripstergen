@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -19,56 +18,6 @@ export function traitsProxyPlugin(projectRoot) {
     if (!base) return null;
     if (!pathname.startsWith(`${PROXY_PREFIX}/`)) return null;
     return `${base}${pathname.slice(PROXY_PREFIX.length)}`;
-  }
-
-  function swSource(base) {
-    return `/* generated — do not edit */
-const ASSETS_BASE = ${JSON.stringify(base)};
-const PROXY_PREFIX = ${JSON.stringify(PROXY_PREFIX)};
-
-self.addEventListener("install", () => self.skipWaiting());
-self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
-
-self.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
-  if (!url.pathname.startsWith(PROXY_PREFIX + "/")) return;
-  const remote = ASSETS_BASE + url.pathname.slice(PROXY_PREFIX.length);
-  event.respondWith(proxyFetch(remote, url.pathname));
-});
-
-self.addEventListener("message", (event) => {
-  const data = event.data;
-  const port = event.ports && event.ports[0];
-  if (!data || data.type !== "FETCH_TRAIT" || !data.path || !port) return;
-  const remote = ASSETS_BASE + data.path;
-  proxyFetch(remote, data.path)
-    .then(async (res) => {
-      if (!res.ok) {
-        port.postMessage({ error: "HTTP " + res.status });
-        return;
-      }
-      const buffer = await res.arrayBuffer();
-      const mime = res.headers.get("Content-Type") || "application/octet-stream";
-      port.postMessage({ buffer: buffer, mime: mime }, [buffer]);
-    })
-    .catch((err) => {
-      port.postMessage({ error: String(err && err.message ? err.message : err) });
-    });
-});
-
-function proxyFetch(remote, pathname) {
-  return fetch(remote).then((res) => {
-    if (!res.ok) return res;
-    const headers = new Headers(res.headers);
-    if (!headers.get("Content-Type")) {
-      const ext = pathname.split(".").pop()?.toLowerCase();
-      const mime = { webp: "image/webp", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", svg: "image/svg+xml", json: "application/json" };
-      if (ext && mime[ext]) headers.set("Content-Type", mime[ext]);
-    }
-    return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
-  });
-}
-`;
   }
 
   return {
@@ -99,23 +48,7 @@ function proxyFetch(remote, pathname) {
         }
       });
 
-      console.log(`[traits-proxy] ${PROXY_PREFIX}/* → ${base}`);
-    },
-    writeBundle(outputOptions) {
-      const base = assetsBase();
-      if (!base) return;
-      const outDir = outputOptions.dir ?? path.join(projectRoot, "dist");
-      const content = swSource(base);
-      const hash = createHash("sha256").update(content).digest("hex").slice(0, 12);
-      const filename = `sw-traits-proxy.${hash}.js`;
-      fs.writeFileSync(path.join(outDir, filename), content, "utf8");
-      fs.writeFileSync(
-        path.join(outDir, "traits-sw.json"),
-        JSON.stringify({ url: filename, v: hash }),
-        "utf8",
-      );
-      const legacy = path.join(outDir, "sw-traits-proxy.js");
-      if (fs.existsSync(legacy)) fs.unlinkSync(legacy);
+      console.log(`[traits-proxy] ${PROXY_PREFIX}/* → ${base} (dev only)`);
     },
   };
 }
