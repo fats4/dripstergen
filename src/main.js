@@ -37,11 +37,19 @@ import {
 const PREVIEW = 1024;
 /** Logical thumbnail size (px); larger canvas buffer for Retina + wide grid cells */
 const THUMB = 96;
-const IMAGE_CACHE_MAX = 150;
+const IMAGE_CACHE_MAX = 300;
+/** Painted thumb bitmaps — instant restore when virtual scroll remounts cells */
+const THUMB_PAINT_CACHE_MAX = 600;
 /** Above this count, thumb grid uses virtual scroll (for 3000+ assets) */
 const VIRTUAL_THUMB_THRESHOLD = 60;
 
 const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
+
+/** @type {Map<string, { sx: number; sy: number; sw: number; sh: number } | null>} */
+const thumbBoundsCache = new Map();
+
+/** @type {Map<string, HTMLCanvasElement>} */
+const thumbPaintCache = new Map();
 
 const app = document.querySelector("#app");
 if (!app) throw new Error("#app is missing");
@@ -49,8 +57,11 @@ if (!app) throw new Error("#app is missing");
 app.innerHTML = `
 <div class="app">
   <header class="header">
-    <h1 class="title">Drip your <span class="title-bracket">Dripster</span></h1>
-    <p class="subtitle">powered by dripster</p>
+    <h1 class="title">
+      <img class="site-logo site-logo--light" src="/driplab-logo-black.png" alt="DRIP[lab]" width="1024" height="115" />
+      <img class="site-logo site-logo--dark" src="/driplab-logo-white.png" alt="DRIP[lab]" width="1024" height="116" />
+    </h1>
+    <p class="subtitle">powered by mondrips</p>
   </header>
 
   <main class="main">
@@ -108,14 +119,20 @@ app.innerHTML = `
             </button>
           </div>
           <button type="button" class="btn btn--ghost" id="btnRandom">
-            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M4 8h4l2-3h6v3M4 16h4l2 3h6v-3M20 8l-2-2m2 2-2 2M20 16l-2 2m2-2-2-2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+            <svg class="btn__icon btn__icon--dice" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="5" y="5" width="14" height="14" rx="3" stroke="currentColor" stroke-width="2" />
+              <circle cx="9.5" cy="9.5" r="1.75" fill="currentColor" />
+              <circle cx="14.5" cy="9.5" r="1.75" fill="currentColor" />
+              <circle cx="12" cy="12" r="1.75" fill="currentColor" />
+              <circle cx="9.5" cy="14.5" r="1.75" fill="currentColor" />
+              <circle cx="14.5" cy="14.5" r="1.75" fill="currentColor" />
             </svg>
             Randomise
           </button>
           <button type="button" class="btn btn--ghost" id="btnReset">
             <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M4 12a8 8 0 0 1 8-8V2M20 12a8 8 0 0 1-8 8v2M4 4v4h4M20 20v-4h-4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M3 3v5h5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
             Reset
           </button>
@@ -141,20 +158,39 @@ app.innerHTML = `
       </div>
       <nav class="tabs" id="tabs" role="tablist"></nav>
       <div class="background-color-bar" id="backgroundColorBar" hidden>
-        <label class="background-color-picker">
-          <span class="background-color-picker__label">Custom color</span>
-          <input type="color" id="backgroundColorInput" value="#6366f1" aria-label="Pick background color" />
-        </label>
-        <input
-          type="text"
-          class="background-color-hex"
-          id="backgroundColorHex"
-          value="#6366f1"
-          maxlength="7"
-          spellcheck="false"
-          autocomplete="off"
-          aria-label="Background color hex code"
-        />
+        <div class="background-color-panel">
+          <div class="background-color-panel__intro">
+            <svg class="background-color-panel__icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="5" y="5" width="14" height="14" rx="3" stroke="currentColor" stroke-width="1.75" />
+              <circle cx="9.5" cy="9.5" r="1.5" fill="currentColor" />
+              <circle cx="14.5" cy="9.5" r="1.5" fill="currentColor" />
+              <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+              <circle cx="9.5" cy="14.5" r="1.5" fill="currentColor" />
+              <circle cx="14.5" cy="14.5" r="1.5" fill="currentColor" />
+            </svg>
+            <div>
+              <p class="background-color-panel__title">Custom background color</p>
+              <p class="background-color-panel__hint">Pick any color below, or tap the <strong>Custom</strong> tile in the grid</p>
+            </div>
+          </div>
+          <div class="background-color-panel__controls">
+            <label class="background-color-swatch" title="Open color picker">
+              <span class="background-color-swatch__label">Color</span>
+              <input type="color" id="backgroundColorInput" value="#6366f1" aria-label="Pick background color" />
+            </label>
+            <input
+              type="text"
+              class="background-color-hex"
+              id="backgroundColorHex"
+              value="#6366f1"
+              maxlength="7"
+              spellcheck="false"
+              autocomplete="off"
+              aria-label="Background color hex code"
+              placeholder="#RRGGBB"
+            />
+          </div>
+        </div>
       </div>
       <div class="sticker-search-bar" id="stickerSearchBar" hidden>
         <div class="seed-group sticker-search-group">
@@ -847,14 +883,17 @@ async function renderPreview() {
 /**
  * @returns {HTMLCanvasElement}
  */
+function thumbCanvasPixelSize() {
+  const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+  return Math.max(256, Math.round(THUMB * dpr * 2.5));
+}
+
 function createThumbCanvas() {
   const c = document.createElement("canvas");
   const tctx = c.getContext("2d");
   if (!tctx) return c;
 
-  const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-  const supersample = 2.5;
-  const px = Math.max(256, Math.round(THUMB * dpr * supersample));
+  const px = thumbCanvasPixelSize();
   c.width = px;
   c.height = px;
   tctx.imageSmoothingEnabled = true;
@@ -862,6 +901,56 @@ function createThumbCanvas() {
   const k = px / THUMB;
   tctx.setTransform(k, 0, 0, k, 0, 0);
   return c;
+}
+
+/**
+ * @param {string} key
+ * @returns {HTMLCanvasElement | null}
+ */
+function getThumbPaintCache(key) {
+  const hit = thumbPaintCache.get(key);
+  if (!hit) return null;
+  thumbPaintCache.delete(key);
+  thumbPaintCache.set(key, hit);
+  return hit;
+}
+
+/**
+ * @param {string} key
+ * @param {HTMLCanvasElement} canvas
+ */
+function setThumbPaintCache(key, canvas) {
+  const px = thumbCanvasPixelSize();
+  const clone = document.createElement("canvas");
+  clone.width = px;
+  clone.height = px;
+  const ctx = clone.getContext("2d");
+  if (!ctx) return;
+  ctx.drawImage(canvas, 0, 0);
+  if (thumbPaintCache.has(key)) thumbPaintCache.delete(key);
+  thumbPaintCache.set(key, clone);
+  while (thumbPaintCache.size > THUMB_PAINT_CACHE_MAX) {
+    const oldest = thumbPaintCache.keys().next().value;
+    if (oldest) thumbPaintCache.delete(oldest);
+  }
+}
+
+/**
+ * @param {HTMLCanvasElement} canvas
+ * @param {string} cacheKey
+ * @returns {boolean}
+ */
+function restorePaintedThumb(canvas, cacheKey) {
+  const src = getThumbPaintCache(cacheKey);
+  if (!src || src.width !== canvas.width || src.height !== canvas.height) return false;
+  const tctx = canvas.getContext("2d");
+  if (!tctx) return false;
+  tctx.setTransform(1, 0, 0, 1, 0, 0);
+  tctx.clearRect(0, 0, canvas.width, canvas.height);
+  tctx.drawImage(src, 0, 0);
+  const k = canvas.width / THUMB;
+  tctx.setTransform(k, 0, 0, k, 0, 0);
+  return true;
 }
 
 function drawEmptyThumb(c) {
@@ -875,20 +964,153 @@ function drawEmptyThumb(c) {
   tctx.strokeRect(0.5, 0.5, THUMB - 1, THUMB - 1);
 }
 
+/** @param {HTMLCanvasElement} c */
+function drawCustomBackgroundThumb(c) {
+  const tctx = c.getContext("2d");
+  if (!tctx) return;
+  tctx.fillStyle = customBackgroundColor;
+  tctx.fillRect(0, 0, THUMB, THUMB);
+  tctx.strokeStyle = "rgb(0 0 0 / 0.18)";
+  tctx.setLineDash([4, 3]);
+  tctx.lineWidth = 1.5;
+  tctx.strokeRect(1, 1, THUMB - 2, THUMB - 2);
+  tctx.setLineDash([]);
+
+  const size = THUMB * 0.44;
+  const x = (THUMB - size) / 2;
+  const y = (THUMB - size) / 2 - THUMB * 0.05;
+  const radius = size * 0.16;
+  const pad = size * 0.24;
+  const pip = size * 0.11;
+
+  tctx.fillStyle = "rgb(255 255 255 / 0.95)";
+  tctx.beginPath();
+  tctx.roundRect(x, y, size, size, radius);
+  tctx.fill();
+  tctx.strokeStyle = "rgb(0 0 0 / 0.28)";
+  tctx.lineWidth = 1.25;
+  tctx.stroke();
+
+  tctx.fillStyle = "rgb(0 0 0 / 0.8)";
+  const drawPip = (/** @type {number} */ px, /** @type {number} */ py) => {
+    tctx.beginPath();
+    tctx.arc(x + px, y + py, pip, 0, Math.PI * 2);
+    tctx.fill();
+  };
+  drawPip(pad, pad);
+  drawPip(size - pad, pad);
+  drawPip(size / 2, size / 2);
+  drawPip(pad, size - pad);
+  drawPip(size - pad, size - pad);
+}
+
+/**
+ * @typedef {{ sx: number; sy: number; sw: number; sh: number }} ThumbCrop
+ */
+
+/**
+ * Layer exports are often 4000×4000 with art in one region — crop to visible pixels for thumbs.
+ * @param {HTMLImageElement} img
+ * @param {string} cacheKey
+ * @returns {Promise<ThumbCrop | null>}
+ */
+async function getImageAlphaBounds(img, cacheKey) {
+  if (thumbBoundsCache.has(cacheKey)) {
+    return thumbBoundsCache.get(cacheKey) ?? null;
+  }
+
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  if (!nw || !nh) {
+    thumbBoundsCache.set(cacheKey, null);
+    return null;
+  }
+
+  const sample = 256;
+  const scale = Math.min(1, sample / Math.max(nw, nh));
+  const w = Math.max(1, Math.round(nw * scale));
+  const h = Math.max(1, Math.round(nh * scale));
+
+  const oc = document.createElement("canvas");
+  oc.width = w;
+  oc.height = h;
+  const ctx = oc.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    thumbBoundsCache.set(cacheKey, null);
+    return null;
+  }
+
+  ctx.drawImage(img, 0, 0, w, h);
+  const data = ctx.getImageData(0, 0, w, h).data;
+
+  let minX = w;
+  let minY = h;
+  let maxX = 0;
+  let maxY = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] > 12) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  if (maxX < minX) {
+    thumbBoundsCache.set(cacheKey, null);
+    return null;
+  }
+
+  const inv = 1 / scale;
+  /** @type {ThumbCrop} */
+  const crop = {
+    sx: minX * inv,
+    sy: minY * inv,
+    sw: (maxX - minX + 1) * inv,
+    sh: (maxY - minY + 1) * inv,
+  };
+  thumbBoundsCache.set(cacheKey, crop);
+  return crop;
+}
+
 /**
  * @param {HTMLCanvasElement} c
  * @param {HTMLImageElement} img
  * @param {boolean} [contain]
+ * @param {ThumbCrop | null} [crop]
  */
-function drawImageOnThumb(c, img, contain = false) {
+function drawImageOnThumb(c, img, contain = false, crop = null) {
   const tctx = c.getContext("2d");
   if (!tctx || !img.naturalWidth) return;
+
+  const pad = THUMB * 0.08;
+  const box = THUMB - pad * 2;
+
+  if (crop) {
+    const scale = Math.min(box / crop.sw, box / crop.sh);
+    const w = crop.sw * scale;
+    const h = crop.sh * scale;
+    tctx.drawImage(
+      img,
+      crop.sx,
+      crop.sy,
+      crop.sw,
+      crop.sh,
+      (THUMB - w) / 2,
+      (THUMB - h) / 2,
+      w,
+      h,
+    );
+    return;
+  }
+
   if (!contain) {
     tctx.drawImage(img, 0, 0, THUMB, THUMB);
     return;
   }
-  const pad = THUMB * 0.08;
-  const box = THUMB - pad * 2;
+
   const scale = Math.min(box / img.naturalWidth, box / img.naturalHeight);
   const w = img.naturalWidth * scale;
   const h = img.naturalHeight * scale;
@@ -922,36 +1144,81 @@ async function loadThumbImage(thumbUrl, fallbackUrl) {
  * @param {HTMLCanvasElement} canvas
  * @param {HTMLImageElement} img
  * @param {boolean} [contain]
+ * @param {ThumbCrop | null} [crop]
  */
-function paintThumbCanvas(canvas, img, contain = false) {
+function paintThumbCanvas(canvas, img, contain = false, crop = null) {
   const tctx = canvas.getContext("2d");
   if (!tctx || !img.naturalWidth) return;
-  const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-  const px = Math.max(256, Math.round(THUMB * dpr * 2.5));
+  const px = thumbCanvasPixelSize();
   tctx.setTransform(1, 0, 0, 1, 0, 0);
   tctx.clearRect(0, 0, px, px);
   const k = px / THUMB;
   tctx.setTransform(k, 0, 0, k, 0, 0);
-  drawImageOnThumb(canvas, img, contain);
+  drawImageOnThumb(canvas, img, contain, crop);
+}
+
+/**
+ * @param {HTMLCanvasElement} canvas
+ * @param {{ thumbUrl: string | null; fullUrl: string | null; contain?: boolean; cropToContent?: boolean }} opts
+ * @returns {boolean}
+ */
+function trySyncHydrateThumb(canvas, opts) {
+  const { thumbUrl, fullUrl, contain = false, cropToContent = false } = opts;
+  const cacheUrl = fullUrl || thumbUrl;
+  if (!cacheUrl) return false;
+  if (restorePaintedThumb(canvas, cacheUrl)) return true;
+
+  const cached =
+    (thumbUrl ? imageCache.get(thumbUrl) : undefined) ??
+    (fullUrl ? imageCache.get(fullUrl) : undefined);
+  if (!cached?.naturalWidth) return false;
+
+  let crop = null;
+  if (cropToContent) {
+    if (!thumbBoundsCache.has(cacheUrl)) return false;
+    crop = thumbBoundsCache.get(cacheUrl) ?? null;
+  }
+
+  paintThumbCanvas(canvas, cached, contain, crop);
+  setThumbPaintCache(cacheUrl, canvas);
+  return true;
 }
 
 /**
  * @param {HTMLButtonElement} btn
  * @param {number} token
- * @param {() => { thumbUrl: string | null; fullUrl: string | null; contain?: boolean }} getUrls
+ * @param {() => { thumbUrl: string | null; fullUrl: string | null; contain?: boolean; cropToContent?: boolean }} getUrls
  */
 async function hydrateThumbButton(btn, token, getUrls) {
   if (token !== thumbRenderToken) return;
   const canvas = btn.querySelector("canvas");
   if (!(canvas instanceof HTMLCanvasElement)) return;
 
-  const { thumbUrl, fullUrl, contain = false } = getUrls();
+  const opts = getUrls();
+  const { thumbUrl, fullUrl, contain = false, cropToContent = false } = opts;
+  const cacheUrl = fullUrl || thumbUrl;
+
+  const paint = async (/** @type {HTMLImageElement} */ img) => {
+    let crop = null;
+    if (cropToContent && cacheUrl) {
+      crop = await getImageAlphaBounds(img, cacheUrl);
+    }
+    if (token !== thumbRenderToken || !btn.isConnected) return;
+    paintThumbCanvas(canvas, img, contain, crop);
+    if (cacheUrl) setThumbPaintCache(cacheUrl, canvas);
+    btn.classList.remove("thumb--loading");
+  };
+
+  if (trySyncHydrateThumb(canvas, opts)) {
+    btn.classList.remove("thumb--loading");
+    return;
+  }
+
   const cached =
     (thumbUrl ? imageCache.get(thumbUrl) : undefined) ??
     (fullUrl ? imageCache.get(fullUrl) : undefined);
   if (cached?.naturalWidth) {
-    paintThumbCanvas(canvas, cached, contain);
-    btn.classList.remove("thumb--loading");
+    await paint(cached);
     return;
   }
 
@@ -962,8 +1229,7 @@ async function hydrateThumbButton(btn, token, getUrls) {
     return;
   }
 
-  paintThumbCanvas(canvas, img, contain);
-  btn.classList.remove("thumb--loading");
+  await paint(img);
 }
 
 /**
@@ -979,6 +1245,8 @@ function createTraitThumbButton(cat, index, selected, token) {
   btn.className = "thumb";
   if (cat === "background" && isCustomBackgroundIndex(index)) {
     btn.classList.add("thumb--custom-bg");
+    btn.title = "Custom color — click to pick";
+    btn.setAttribute("aria-label", "Custom background color");
   }
   btn.setAttribute("aria-selected", selected ? "true" : "false");
   btn.dataset.index = String(index);
@@ -987,23 +1255,25 @@ function createTraitThumbButton(cat, index, selected, token) {
   if (index === 0) {
     drawEmptyThumb(canvas);
   } else if (cat === "background" && isCustomBackgroundIndex(index)) {
-    const tctx = canvas.getContext("2d");
-    if (tctx) {
-      tctx.fillStyle = customBackgroundColor;
-      tctx.fillRect(0, 0, THUMB, THUMB);
-      tctx.strokeStyle = "rgb(0 0 0 / 0.12)";
-      tctx.lineWidth = 1;
-      tctx.strokeRect(0.5, 0.5, THUMB - 1, THUMB - 1);
-    }
-  } else {
-    btn.classList.add("thumb--loading");
+    drawCustomBackgroundThumb(canvas);
   }
   btn.appendChild(canvas);
+
+  if (cat === "background" && isCustomBackgroundIndex(index)) {
+    const badge = document.createElement("span");
+    badge.className = "thumb-custom-bg-badge";
+    badge.textContent = "Custom";
+    btn.appendChild(badge);
+  }
 
   if (index > 0 && !(cat === "background" && isCustomBackgroundIndex(index))) {
     const fullUrl = traitFullUrl(cat, index);
     const thumbUrl = fullUrl ? categoryThumbUrl(cat, fullUrl) : null;
-    void hydrateThumbButton(btn, token, () => ({ thumbUrl, fullUrl, contain: false }));
+    const opts = { thumbUrl, fullUrl, cropToContent: true };
+    if (!trySyncHydrateThumb(canvas, opts)) {
+      btn.classList.add("thumb--loading");
+      void hydrateThumbButton(btn, token, () => opts);
+    }
   }
 
   btn.addEventListener("click", () => {
@@ -1020,6 +1290,11 @@ async function onTraitThumbClick(cat, index) {
   selection = { ...selection, [cat]: index };
   syncSeed();
   renderThumbs();
+  if (cat === "background" && isCustomBackgroundIndex(index)) {
+    backgroundColorInput?.click();
+    await renderPreview();
+    return;
+  }
   const url = traitFullUrl(cat, index);
   if (url) await getCachedImage(imageCache, url).catch(() => null);
   await renderPreview();
@@ -1041,14 +1316,16 @@ function createStickerThumbButton(index, selected, token) {
   const canvas = createThumbCanvas();
   if (index === 0) {
     drawEmptyThumb(canvas);
-  } else {
-    btn.classList.add("thumb--loading");
   }
   btn.appendChild(canvas);
 
   if (index > 0) {
     const fullUrl = stickerFullUrl(index);
-    void hydrateThumbButton(btn, token, () => ({ thumbUrl: null, fullUrl, contain: true }));
+    const opts = { thumbUrl: null, fullUrl, contain: true };
+    if (!trySyncHydrateThumb(canvas, opts)) {
+      btn.classList.add("thumb--loading");
+      void hydrateThumbButton(btn, token, () => opts);
+    }
   }
 
   btn.addEventListener("click", () => {
@@ -1237,15 +1514,10 @@ async function randomize() {
     next[key] = Math.floor(Math.random() * n);
   }
   selection = next;
-  if (stickerCatalog.length > 0) {
-    stickerOverlay = {
-      ...stickerOverlay,
-      index: Math.floor(Math.random() * getStickerCount()),
-    };
-    await refreshActiveStickerImage();
-    persistStickerOverlay();
-    syncStickerOverlayUi();
-  }
+  stickerOverlay = defaultStickerOverlay();
+  applyActiveStickerImage();
+  persistStickerOverlay();
+  syncStickerOverlayUi();
   syncSeed();
   renderThumbs();
   await renderPreview();
@@ -1403,14 +1675,25 @@ btnStickerSearchApply?.addEventListener("click", () => {
   void applyStickerSearch();
 });
 
+/** Random skin only; clothes, hat, glasses, background, and sticker start empty. */
+function applyInitialState() {
+  const n = traitCatalog.skin.length;
+  if (n > 0) {
+    selection = { ...selection, skin: 1 + Math.floor(Math.random() * n) };
+  }
+  stickerOverlay = defaultStickerOverlay();
+  applyActiveStickerImage();
+}
+
 async function init() {
   loadStoredCustomBackgroundColor();
-  loadStoredStickerOverlay();
   try {
     await Promise.all([loadTraitCatalog(), loadStickerCatalog()]);
   } catch (e) {
     console.error(e);
   }
+  clampSelection();
+  applyInitialState();
   clampSelection();
   clampStickerSelection();
   persistStickerOverlay();
