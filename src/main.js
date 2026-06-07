@@ -596,8 +596,8 @@ function syncStickerOverlayUi() {
  * @param {StickerOverlay} o
  * @returns {{ w: number; h: number; cx: number; cy: number }}
  */
-function stickerOverlayLayout(o) {
-  const img = activeStickerImage;
+function stickerOverlayLayout(o, stickerImg = activeStickerImage) {
+  const img = stickerImg;
   if (!img?.naturalWidth) {
     return { w: 0, h: 0, cx: o.x * PREVIEW, cy: o.y * PREVIEW };
   }
@@ -618,7 +618,7 @@ function stickerOverlayLayout(o) {
 function drawStickerOverlay(ctx, o, stickerImg = activeStickerImage) {
   const img = stickerImg;
   if (o.index <= 0 || !img?.naturalWidth) return;
-  const { w, h, cx, cy } = stickerOverlayLayout(o);
+  const { w, h, cx, cy } = stickerOverlayLayout(o, img);
   const rad = (o.rotation * Math.PI) / 180;
   ctx.save();
   ctx.imageSmoothingEnabled = true;
@@ -1678,7 +1678,15 @@ async function downloadPng() {
   } catch (err) {
     console.error("[download]", err);
     let msg = "Download gagal.\n\nRefresh halaman (Cmd+Shift+R) lalu coba lagi.";
-    if (err instanceof TypeError || (err instanceof Error && /fetch|CORS|Failed/i.test(err.message))) {
+    if (err instanceof Error) {
+      if (/fetch|CORS|Failed to load/i.test(err.message)) {
+        msg = `${exportCorsSetupMessage()}\n\nDetail: ${err.message}`;
+      } else if (err.message.startsWith("HTTP ")) {
+        msg = `Download gagal — gambar tidak ditemukan.\n\n${err.message}\n\nRefresh halaman lalu coba lagi.`;
+      } else if (err.message.includes("layer(s) failed")) {
+        msg = `Download gagal — beberapa layer tidak termuat.\n\n${err.message}\n\nTunggu preview selesai, lalu coba lagi.`;
+      }
+    } else if (err instanceof TypeError) {
       msg = exportCorsSetupMessage();
     }
     window.alert(msg);
@@ -1815,7 +1823,23 @@ function applyInitialState() {
   applyActiveStickerImage();
 }
 
+/** Remove old traits-proxy service workers that break CORS export. */
+async function clearLegacyServiceWorkers() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map((reg) => reg.unregister()));
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((k) => /traits|dripster|sw/i.test(k)).map((k) => caches.delete(k)));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 async function init() {
+  await clearLegacyServiceWorkers();
   loadStoredCustomBackgroundColor();
   try {
     await Promise.all([loadTraitCatalog(), loadStickerCatalog()]);

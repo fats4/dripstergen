@@ -5,8 +5,6 @@
  *
  * Empty = same origin (`/traits/...` from public/ or dist/).
  *
- * Production images are loaded via `/traits-proxy/...` (service worker) so canvas
- * export works without R2 bucket CORS.
  */
 
 const TRAITS_PROXY_PREFIX = "/traits-proxy";

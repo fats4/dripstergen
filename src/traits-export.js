@@ -1,5 +1,5 @@
 import { usesRemoteAssets } from "./assets.js";
-import { getCachedImage, LruImageCache } from "./image-cache.js";
+import { getCachedImage, loadImageElementOnce, LruImageCache } from "./image-cache.js";
 
 const CORS_SETUP_MSG =
   "Download butuh CORS di assets.mondrips.com.\n\n" +
@@ -44,11 +44,32 @@ export async function loadExportTraitImage(cache, assetUrl) {
     return getCachedImage(cache, assetUrl);
   }
 
-  const res = await fetch(assetUrl, { mode: "cors", credentials: "omit", cache: "force-cache" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const img = await imageFromBlob(await res.blob());
-  cache.set(assetUrl, img);
-  return img;
+  /** @type {unknown} */
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const bust = attempt > 0 ? (assetUrl.includes("?") ? "&" : "?") + `_e=${Date.now()}` : "";
+      const res = await fetch(`${assetUrl}${bust}`, {
+        mode: "cors",
+        credentials: "omit",
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${assetUrl}`);
+      const img = await imageFromBlob(await res.blob());
+      cache.set(assetUrl, img);
+      return img;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  try {
+    const img = await loadImageElementOnce(assetUrl, true);
+    cache.set(assetUrl, img);
+    return img;
+  } catch {
+    throw lastErr instanceof Error ? lastErr : new Error(`Failed to load ${assetUrl}`);
+  }
 }
 
 /** @returns {string} */
