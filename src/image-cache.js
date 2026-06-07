@@ -30,6 +30,16 @@ export function loadImageElement(url) {
   return loadImageElementOnce(url, true).catch(() => loadImageElementOnce(url, false));
 }
 
+/**
+ * CORS-only load for canvas export (Download PNG). No non-CORS fallback.
+ * @param {string} url
+ * @returns {Promise<HTMLImageElement>}
+ */
+export function loadImageElementCors(url) {
+  const wantsCors = assetNeedsCrossOrigin(url);
+  return loadImageElementOnce(url, wantsCors);
+}
+
 export class LruImageCache {
   /**
    * @param {number} [max]
@@ -98,6 +108,36 @@ export async function getCachedImage(cache, url) {
     });
 
   inFlight.set(url, promise);
+  return promise;
+}
+
+/** @type {Map<string, Promise<HTMLImageElement>>} */
+const inFlightCors = new Map();
+
+/**
+ * @param {LruImageCache} cache
+ * @param {string} url
+ * @returns {Promise<HTMLImageElement>}
+ */
+export async function getCachedImageCors(cache, url) {
+  const hit = cache.get(url);
+  if (hit) return hit;
+
+  const pending = inFlightCors.get(url);
+  if (pending) return pending;
+
+  const promise = loadImageElementCors(url)
+    .then((img) => {
+      cache.set(url, img);
+      inFlightCors.delete(url);
+      return img;
+    })
+    .catch((err) => {
+      inFlightCors.delete(url);
+      throw err;
+    });
+
+  inFlightCors.set(url, promise);
   return promise;
 }
 

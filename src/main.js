@@ -8,7 +8,7 @@ import {
   traitsScanUrl,
   usesRemoteAssets,
 } from "./assets.js";
-import { getCachedImage, LruImageCache } from "./image-cache.js";
+import { getCachedImage, getCachedImageCors, LruImageCache } from "./image-cache.js";
 import {
   CATEGORY_KEYS,
   COMPOSITE_ORDER,
@@ -44,6 +44,8 @@ const THUMB_PAINT_CACHE_MAX = 600;
 const VIRTUAL_THUMB_THRESHOLD = 60;
 
 const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
+/** CORS-only cache — used for Download PNG (must not mix with non-CORS preview images). */
+const exportImageCache = new LruImageCache(IMAGE_CACHE_MAX);
 
 /** @type {Map<string, { sx: number; sy: number; sw: number; sh: number } | null>} */
 const thumbBoundsCache = new Map();
@@ -607,8 +609,13 @@ function stickerOverlayLayout(o) {
  * @param {CanvasRenderingContext2D} ctx
  * @param {StickerOverlay} o
  */
-function drawStickerOverlay(ctx, o) {
-  const img = activeStickerImage;
+/**
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {StickerOverlay} o
+ * @param {HTMLImageElement | null} [stickerImg]
+ */
+function drawStickerOverlay(ctx, o, stickerImg = activeStickerImage) {
+  const img = stickerImg;
   if (o.index <= 0 || !img?.naturalWidth) return;
   const { w, h, cx, cy } = stickerOverlayLayout(o);
   const rad = (o.rotation * Math.PI) / 180;
@@ -841,8 +848,10 @@ function getInitialTheme() {
 /**
  * @param {CanvasRenderingContext2D} ctx
  * @param {Selection} sel
+ * @param {LruImageCache} [cache]
+ * @param {HTMLImageElement | null} [stickerImg]
  */
-function drawComposite(ctx, sel) {
+function drawComposite(ctx, sel, cache = imageCache, stickerImg = activeStickerImage) {
   ctx.clearRect(0, 0, PREVIEW, PREVIEW);
 
   const hasCustomBg = isCustomBackgroundIndex(sel.background);
@@ -863,13 +872,45 @@ function drawComposite(ctx, sel) {
       continue;
     }
     const url = traitFullUrl(key, sel[key]);
-    const img = url ? imageCache.get(url) : undefined;
+    const img = url ? cache.get(url) : undefined;
     if (img) {
       ctx.drawImage(img, 0, 0, PREVIEW, PREVIEW);
     }
   }
 
-  drawStickerOverlay(ctx, stickerOverlay);
+  drawStickerOverlay(ctx, stickerOverlay, stickerImg);
+}
+
+/**
+ * @param {Selection} sel
+ * @returns {Promise<HTMLImageElement | null>}
+ */
+async function loadExportStickerImage(sel, sticker) {
+  if (sticker.index <= 0) return null;
+  const url = stickerFullUrl(sticker.index);
+  if (!url) return null;
+  try {
+    return await getCachedImageCors(exportImageCache, url);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {Selection} sel
+ * @returns {Promise<void>}
+ */
+async function prefetchExportLayers(sel = selection) {
+  /** @type {string[]} */
+  const urls = [];
+  for (const key of COMPOSITE_ORDER) {
+    if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
+    const url = traitFullUrl(key, sel[key]);
+    if (url) urls.push(url);
+  }
+  await Promise.all(
+    urls.map((url) => getCachedImageCors(exportImageCache, url).catch(() => null)),
+  );
 }
 
 async function renderPreview() {
@@ -1559,16 +1600,47 @@ function resetStickerPosition() {
   void renderPreview();
 }
 
-function downloadPng() {
-  previewCanvas.toBlob((blob) => {
-    if (!blob) return;
+async function downloadPng() {
+  if (!btnDownload) return;
+  btnDownload.disabled = true;
+  const label = btnDownload.textContent;
+  btnDownload.textContent = "Exporting…";
+
+  try {
+    await prefetchExportLayers();
+    const stickerImg = await loadExportStickerImage(selection, stickerOverlay);
+
+    const exportCanvas = document.createElement("canvas");
+    exportCanvas.width = PREVIEW;
+    exportCanvas.height = PREVIEW;
+    const ctx = exportCanvas.getContext("2d");
+    if (!ctx) throw new Error("no 2d context");
+
+    drawComposite(ctx, selection, exportImageCache, stickerImg);
+
+    const blob = await new Promise((resolve) => {
+      exportCanvas.toBlob(resolve, "image/png");
+    });
+    if (!blob) {
+      throw new Error("tainted canvas");
+    }
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `drip-pfp-${selectionToSeed(selection)}.png`;
     a.click();
     URL.revokeObjectURL(url);
-  }, "image/png");
+  } catch {
+    window.alert(
+      "Download gagal — server aset (assets.mondrips.com) perlu CORS.\n\n" +
+        "Cloudflare Dashboard → R2 → bucket → Settings → CORS → paste isi scripts/r2-cors.json\n\n" +
+        "Setelah disimpan, refresh halaman lalu coba lagi.",
+    );
+  } finally {
+    btnDownload.disabled = false;
+    btnDownload.textContent = label;
+  }
 }
 
 btnRandom?.addEventListener("click", randomize);

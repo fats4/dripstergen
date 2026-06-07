@@ -50,13 +50,22 @@ const client = new S3Client({
   credentials: { accessKeyId, secretAccessKey },
 });
 
-await client.send(
-  new PutBucketCorsCommand({
-    Bucket: bucket,
-    CORSConfiguration: { CORSRules: rules },
-  }),
-);
+try {
+  await client.send(
+    new PutBucketCorsCommand({
+      Bucket: bucket,
+      CORSConfiguration: { CORSRules: rules },
+    }),
+  );
 
-const current = await client.send(new GetBucketCorsCommand({ Bucket: bucket }));
-console.log("apply-r2-cors: OK for bucket", bucket);
-console.log(JSON.stringify(current.CORSRules, null, 2));
+  const current = await client.send(new GetBucketCorsCommand({ Bucket: bucket }));
+  console.log("apply-r2-cors: OK for bucket", bucket);
+  console.log(JSON.stringify(current.CORSRules, null, 2));
+} catch (err) {
+  const code = err && typeof err === "object" && "Code" in err ? err.Code : "";
+  console.error("apply-r2-cors: API failed", code || err);
+  console.error("\nSet CORS manually in Cloudflare Dashboard:");
+  console.error("  R2 → your bucket → Settings → CORS policy → paste scripts/r2-cors.json");
+  console.error("\nRequired for Download PNG on driplab.mondrips.com.");
+  process.exit(1);
+}
