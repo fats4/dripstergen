@@ -14,7 +14,10 @@ import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 
-const TRAIT_ROOT = path.join(process.cwd(), "public", "traits");
+const rootArg = process.argv.find((a) => a.startsWith("--root="));
+const TRAIT_ROOT = rootArg
+  ? path.resolve(rootArg.split("=")[1])
+  : path.join(process.cwd(), "public", "traits");
 const CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "stickers"];
 const SOURCE_EXT = /\.(png|jpg|jpeg)$/i;
 

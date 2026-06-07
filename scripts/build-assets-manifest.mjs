@@ -18,11 +18,13 @@ const TRAIT_CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "st
 const TRAIT_EXT = /\.(png|webp|jpe?g|svg)$/i;
 
 const outArg = process.argv.find((a) => a.startsWith("--out="));
+const rootArg = process.argv.find((a) => a.startsWith("--root="));
+const traitRoot = rootArg
+  ? path.resolve(rootArg.split("=")[1])
+  : path.join(process.cwd(), "public", "traits");
 const outPath = outArg
-  ? outArg.split("=")[1]
-  : path.join(process.cwd(), "public", "traits", "_scan.json");
-
-const traitRoot = path.join(process.cwd(), "public", "traits");
+  ? path.resolve(outArg.split("=")[1])
+  : path.join(traitRoot, "_scan.json");
 
 function preferTraitFilenames(files) {
   const best = new Map();

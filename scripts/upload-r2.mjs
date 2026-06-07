@@ -16,7 +16,7 @@
  *
  * Usage:
  *   npm run upload:r2
- *   npm run upload:r2 -- --dir=./ipfs-upload/traits
+ *   npm run upload:r2 -- --dir=./r2-upload/traits
  *   npm run upload:r2 -- --dry-run
  */
 
@@ -59,7 +59,7 @@ const dryRun = process.argv.includes("--dry-run");
 const dirArg = process.argv.find((a) => a.startsWith("--dir="));
 const srcRoot = dirArg
   ? path.resolve(dirArg.split("=")[1])
-  : path.join(process.cwd(), "ipfs-upload", "traits");
+  : path.join(process.cwd(), "r2-upload", "traits");
 
 const accountId = process.env.R2_ACCOUNT_ID?.trim();
 const accessKeyId = process.env.R2_ACCESS_KEY_ID?.trim();
@@ -74,7 +74,7 @@ if (!dryRun && (!accountId || !accessKeyId || !secretAccessKey || !bucket)) {
 
 if (!fs.existsSync(srcRoot)) {
   console.error(`upload-r2: source not found: ${srcRoot}`);
-  console.error("  Run: npm run prepare:ipfs:update");
+  console.error("  Run: npm run prepare:r2:update");
   process.exit(1);
 }
 

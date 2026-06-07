@@ -45,6 +45,8 @@ const THUMB_PAINT_CACHE_MAX = 600;
 const VIRTUAL_THUMB_THRESHOLD = 60;
 
 const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
+/** Fresh CORS-only images for PNG export — never shared with preview cache. */
+const exportImageCache = new LruImageCache(IMAGE_CACHE_MAX);
 
 /** @type {Map<string, { sx: number; sy: number; sw: number; sh: number } | null>} */
 const thumbBoundsCache = new Map();
@@ -906,40 +908,49 @@ function countLoadedLayersInCache(sel, cache) {
     const url = stickerFullUrl(stickerOverlay.index);
     if (url) {
       expected += 1;
-      const stickerImg = cache.get(url) ?? activeStickerImage;
-      if (stickerImg?.naturalWidth) loaded += 1;
+      if (cache.get(url)?.naturalWidth) loaded += 1;
     }
   }
   return { expected, loaded };
 }
 
 /**
- * Reload selected layers with CORS into imageCache so export matches preview.
  * @param {Selection} [sel]
- * @returns {Promise<void>}
+ * @returns {Promise<HTMLImageElement | null>}
  */
-async function ensureCorsLayersForExport(sel = selection) {
+async function loadExportLayers(sel = selection) {
+  exportImageCache.map.clear();
+
+  /** @type {Promise<unknown>[]} */
+  const jobs = [];
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
     const url = traitFullUrl(key, sel[key]);
     if (!url) continue;
-    try {
-      await loadExportTraitImage(imageCache, url);
-    } catch {
-      /* layer skipped */
-    }
+    jobs.push(loadExportTraitImage(exportImageCache, url));
   }
+
+  let stickerImg = null;
   if (stickerOverlay.index > 0) {
     const url = stickerFullUrl(stickerOverlay.index);
     if (url) {
-      try {
-        const img = await loadExportTraitImage(imageCache, url);
-        activeStickerImage = img;
-      } catch {
-        activeStickerImage = null;
-      }
+      jobs.push(
+        loadExportTraitImage(exportImageCache, url).then((img) => {
+          stickerImg = img;
+        }),
+      );
     }
   }
+
+  const results = await Promise.allSettled(jobs);
+  const failed = results.filter((r) => r.status === "rejected");
+  if (failed.length > 0) {
+    throw failed[0].reason ?? new Error(`${failed.length} layer(s) failed to load`);
+  }
+  if (jobs.length > 0 && results.every((r) => r.status !== "fulfilled")) {
+    throw new Error("no layers loaded");
+  }
+  return stickerImg;
 }
 
 async function renderPreview() {
@@ -1636,9 +1647,9 @@ async function downloadPng() {
   btnDownload.textContent = "Exporting…";
 
   try {
-    await ensureCorsLayersForExport();
+    const stickerImg = await loadExportLayers();
 
-    const { expected, loaded } = countLoadedLayersInCache(selection, imageCache);
+    const { expected, loaded } = countLoadedLayersInCache(selection, exportImageCache);
     if (expected > 0 && loaded === 0) {
       throw new Error("no layers loaded");
     }
@@ -1649,18 +1660,11 @@ async function downloadPng() {
     const ctx = exportCanvas.getContext("2d");
     if (!ctx) throw new Error("no 2d context");
 
-    drawComposite(ctx, selection, imageCache, activeStickerImage);
+    drawComposite(ctx, selection, exportImageCache, stickerImg);
 
-    let blob = await new Promise((resolve) => {
+    const blob = await new Promise((resolve) => {
       exportCanvas.toBlob(resolve, "image/png");
     });
-    if (!blob) {
-      // Redraw preview with CORS images and export from preview canvas.
-      drawComposite(previewCtx, selection, imageCache, activeStickerImage);
-      blob = await new Promise((resolve) => {
-        previewCanvas.toBlob(resolve, "image/png");
-      });
-    }
     if (!blob) {
       throw new Error("tainted canvas");
     }
@@ -1673,10 +1677,10 @@ async function downloadPng() {
     URL.revokeObjectURL(url);
   } catch (err) {
     console.error("[download]", err);
-    const msg =
-      err instanceof Error && err.message === "cors_required"
-        ? exportCorsSetupMessage()
-        : "Download gagal — gambar trait belum termuat.\n\nRefresh halaman (Cmd+Shift+R) lalu coba lagi.";
+    let msg = "Download gagal.\n\nRefresh halaman (Cmd+Shift+R) lalu coba lagi.";
+    if (err instanceof TypeError || (err instanceof Error && /fetch|CORS|Failed/i.test(err.message))) {
+      msg = exportCorsSetupMessage();
+    }
     window.alert(msg);
   } finally {
     btnDownload.disabled = false;

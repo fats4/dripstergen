@@ -7,8 +7,8 @@ dist
 .env
 .env.local
 
-# IPFS upload staging
-ipfs-upload/
+# R2 upload staging
+r2-upload/
 
-# Assets served from IPFS in production (keep locally for dev)
+# Assets served from R2 in production (keep locally for dev)
 public/traits/

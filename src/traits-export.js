@@ -1,36 +1,54 @@
 import { usesRemoteAssets } from "./assets.js";
-import { getCachedImage, loadImageElementOnce, LruImageCache } from "./image-cache.js";
+import { getCachedImage, LruImageCache } from "./image-cache.js";
 
 const CORS_SETUP_MSG =
   "Download butuh CORS di assets.mondrips.com.\n\n" +
-  "Cloudflare Dashboard → Rules → Transform Rules → Modify Response Header:\n" +
-  "  If hostname = assets.mondrips.com\n" +
-  "  Set Access-Control-Allow-Origin = https://driplab.mondrips.com\n" +
-  "  Set Access-Control-Allow-Methods = GET, HEAD\n\n" +
-  "Atau deploy workers/assets-cors.js ke assets.mondrips.com\n" +
-  "(lihat juga scripts/r2-cors.json untuk R2 bucket CORS).";
+  "R2 bucket → Settings → CORS → paste scripts/r2-cors.json\n" +
+  "Lalu purge cache Cloudflare untuk assets.mondrips.com";
 
 /**
- * Load trait image for PNG export — requires CORS on the asset host.
+ * @param {Blob} blob
+ * @returns {Promise<HTMLImageElement>}
+ */
+function imageFromBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      if (!img.naturalWidth) {
+        reject(new Error("decode failed"));
+        return;
+      }
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("decode failed"));
+    };
+    img.src = url;
+  });
+}
+
+/**
+ * Load trait image for PNG export into a dedicated cache (never reuse preview cache).
  * @param {LruImageCache} cache
  * @param {string} assetUrl
  * @returns {Promise<HTMLImageElement>}
  */
 export async function loadExportTraitImage(cache, assetUrl) {
+  const hit = cache.get(assetUrl);
+  if (hit?.naturalWidth) return hit;
+
   if (!usesRemoteAssets()) {
-    const hit = cache.get(assetUrl);
-    if (hit?.naturalWidth) return hit;
     return getCachedImage(cache, assetUrl);
   }
 
-  // Always fetch with CORS for export — preview cache may hold non-CORS (tainted) images.
-  try {
-    const img = await loadImageElementOnce(assetUrl, true);
-    cache.set(assetUrl, img);
-    return img;
-  } catch {
-    throw new Error("cors_required");
-  }
+  const res = await fetch(assetUrl, { mode: "cors", credentials: "omit", cache: "force-cache" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const img = await imageFromBlob(await res.blob());
+  cache.set(assetUrl, img);
+  return img;
 }
 
 /** @returns {string} */
