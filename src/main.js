@@ -9,7 +9,7 @@ import {
   usesRemoteAssets,
 } from "./assets.js";
 import { getCachedImage, LruImageCache } from "./image-cache.js";
-import { loadExportTraitImage, registerTraitsExportWorker } from "./traits-export.js";
+import { loadExportTraitImage } from "./traits-export.js";
 import {
   CATEGORY_KEYS,
   COMPOSITE_ORDER,
@@ -1668,7 +1668,8 @@ async function downloadPng() {
     a.download = `drip-pfp-${selectionToSeed(selection)}.png`;
     a.click();
     URL.revokeObjectURL(url);
-  } catch {
+  } catch (err) {
+    console.error("[download]", err);
     window.alert(
       "Download gagal — gambar trait belum termuat.\n\n" +
         "Refresh halaman (Cmd+Shift+R) lalu coba lagi.",
@@ -1807,7 +1808,6 @@ function applyInitialState() {
 }
 
 async function init() {
-  await registerTraitsExportWorker();
   loadStoredCustomBackgroundColor();
   try {
     await Promise.all([loadTraitCatalog(), loadStickerCatalog()]);

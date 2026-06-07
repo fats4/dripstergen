@@ -1,30 +1,5 @@
-import { assetPathFromUrl, toTraitsProxyUrl, usesRemoteAssets } from "./assets.js";
+import { toTraitsProxyUrl, usesRemoteAssets } from "./assets.js";
 import { getCachedImage, LruImageCache } from "./image-cache.js";
-
-/**
- * @param {string} path e.g. /traits/skin/Basic.webp
- * @returns {Promise<Blob>}
- */
-async function fetchTraitBlobViaServiceWorker(path) {
-  const reg = await navigator.serviceWorker.ready;
-  const sw = reg.active;
-  if (!sw) throw new Error("service worker not active");
-
-  return new Promise((resolve, reject) => {
-    const channel = new MessageChannel();
-    const timer = window.setTimeout(() => reject(new Error("service worker timeout")), 20000);
-    channel.port1.onmessage = (event) => {
-      window.clearTimeout(timer);
-      const data = event.data;
-      if (!data || data.error) {
-        reject(new Error(data?.error ?? "fetch failed"));
-        return;
-      }
-      resolve(new Blob([data.buffer], { type: data.mime || "application/octet-stream" }));
-    };
-    sw.postMessage({ type: "FETCH_TRAIT", path }, [channel.port2]);
-  });
-}
 
 /**
  * @param {Blob} blob
@@ -36,6 +11,10 @@ function imageFromBlob(blob) {
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(url);
+      if (!img.naturalWidth) {
+        reject(new Error("decode failed"));
+        return;
+      }
       resolve(img);
     };
     img.onerror = () => {
@@ -47,6 +26,25 @@ function imageFromBlob(blob) {
 }
 
 /**
+ * Opaque cross-origin fetch → blob URL is same-origin → safe for canvas export.
+ * @param {string} assetUrl
+ * @returns {Promise<HTMLImageElement>}
+ */
+async function loadExportImageOpaque(assetUrl) {
+  try {
+    const corsRes = await fetch(assetUrl, { mode: "cors", credentials: "omit", cache: "force-cache" });
+    if (corsRes.ok) return imageFromBlob(await corsRes.blob());
+  } catch {
+    /* R2 CORS often unset — fall back to opaque fetch */
+  }
+
+  const res = await fetch(assetUrl, { mode: "no-cors", credentials: "omit", cache: "force-cache" });
+  const blob = await res.blob();
+  if (!blob.size) throw new Error("empty response");
+  return imageFromBlob(blob);
+}
+
+/**
  * Load trait image for PNG export (same-origin blob — safe for canvas export).
  * @param {LruImageCache} cache
  * @param {string} assetUrl
@@ -54,37 +52,21 @@ function imageFromBlob(blob) {
  */
 export async function loadExportTraitImage(cache, assetUrl) {
   const hit = cache.get(assetUrl);
-  if (hit) return hit;
+  if (hit?.naturalWidth) return hit;
 
   if (!usesRemoteAssets()) {
     return getCachedImage(cache, assetUrl);
   }
 
-  const path = assetPathFromUrl(assetUrl);
-  if (!path) throw new Error("invalid asset url");
-
-  let blob;
+  let img;
   if (import.meta.env.DEV) {
     const res = await fetch(toTraitsProxyUrl(assetUrl));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    blob = await res.blob();
+    img = await imageFromBlob(await res.blob());
   } else {
-    blob = await fetchTraitBlobViaServiceWorker(path);
+    img = await loadExportImageOpaque(assetUrl);
   }
 
-  const img = await imageFromBlob(blob);
   cache.set(assetUrl, img);
   return img;
-}
-
-/**
- * @returns {Promise<void>}
- */
-export async function registerTraitsExportWorker() {
-  if (!usesRemoteAssets() || !("serviceWorker" in navigator) || import.meta.env.DEV) return;
-  try {
-    await navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw-traits-proxy.js`);
-  } catch (err) {
-    console.warn("[traits-export] service worker registration failed", err);
-  }
 }
