@@ -8,7 +8,7 @@ import {
   traitsScanUrl,
   usesRemoteAssets,
 } from "./assets.js";
-import { getCachedImage, getCachedImageCors, LruImageCache } from "./image-cache.js";
+import { getCachedImage, LruImageCache } from "./image-cache.js";
 import {
   CATEGORY_KEYS,
   COMPOSITE_ORDER,
@@ -44,8 +44,6 @@ const THUMB_PAINT_CACHE_MAX = 600;
 const VIRTUAL_THUMB_THRESHOLD = 60;
 
 const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
-/** CORS-only cache — used for Download PNG (must not mix with non-CORS preview images). */
-const exportImageCache = new LruImageCache(IMAGE_CACHE_MAX);
 
 /** @type {Map<string, { sx: number; sy: number; sw: number; sh: number } | null>} */
 const thumbBoundsCache = new Map();
@@ -883,34 +881,40 @@ function drawComposite(ctx, sel, cache = imageCache, stickerImg = activeStickerI
 
 /**
  * @param {Selection} sel
- * @returns {Promise<HTMLImageElement | null>}
+ * @returns {{ expected: number; loaded: number }}
  */
-async function loadExportStickerImage(sel, sticker) {
-  if (sticker.index <= 0) return null;
-  const url = stickerFullUrl(sticker.index);
-  if (!url) return null;
-  try {
-    return await getCachedImageCors(exportImageCache, url);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * @param {Selection} sel
- * @returns {Promise<void>}
- */
-async function prefetchExportLayers(sel = selection) {
-  /** @type {string[]} */
-  const urls = [];
+function countLoadedLayers(sel) {
+  let expected = 0;
+  let loaded = 0;
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
     const url = traitFullUrl(key, sel[key]);
-    if (url) urls.push(url);
+    if (!url) continue;
+    expected += 1;
+    if (imageCache.get(url)?.naturalWidth) loaded += 1;
   }
-  await Promise.all(
-    urls.map((url) => getCachedImageCors(exportImageCache, url).catch(() => null)),
-  );
+  if (stickerOverlay.index > 0) {
+    const url = stickerFullUrl(stickerOverlay.index);
+    if (url) {
+      expected += 1;
+      if (activeStickerImage?.naturalWidth) loaded += 1;
+    }
+  }
+  return { expected, loaded };
+}
+
+/**
+ * @returns {Promise<void>}
+ */
+async function registerTraitsProxySw() {
+  if (!usesRemoteAssets() || !("serviceWorker" in navigator)) return;
+  try {
+    const swUrl = `${import.meta.env.BASE_URL}sw-traits-proxy.js`;
+    await navigator.serviceWorker.register(swUrl);
+    await navigator.serviceWorker.ready;
+  } catch (err) {
+    console.warn("[traits-proxy] service worker failed", err);
+  }
 }
 
 async function renderPreview() {
@@ -1607,8 +1611,15 @@ async function downloadPng() {
   btnDownload.textContent = "Exporting…";
 
   try {
-    await prefetchExportLayers();
-    const stickerImg = await loadExportStickerImage(selection, stickerOverlay);
+    await prefetchSelectionLayers();
+    if (stickerOverlay.index > 0) {
+      await refreshActiveStickerImage();
+    }
+
+    const { expected, loaded } = countLoadedLayers(selection);
+    if (expected > 0 && loaded === 0) {
+      throw new Error("no layers loaded");
+    }
 
     const exportCanvas = document.createElement("canvas");
     exportCanvas.width = PREVIEW;
@@ -1616,7 +1627,7 @@ async function downloadPng() {
     const ctx = exportCanvas.getContext("2d");
     if (!ctx) throw new Error("no 2d context");
 
-    drawComposite(ctx, selection, exportImageCache, stickerImg);
+    drawComposite(ctx, selection);
 
     const blob = await new Promise((resolve) => {
       exportCanvas.toBlob(resolve, "image/png");
@@ -1633,9 +1644,8 @@ async function downloadPng() {
     URL.revokeObjectURL(url);
   } catch {
     window.alert(
-      "Download gagal — server aset (assets.mondrips.com) perlu CORS.\n\n" +
-        "Cloudflare Dashboard → R2 → bucket → Settings → CORS → paste isi scripts/r2-cors.json\n\n" +
-        "Setelah disimpan, refresh halaman lalu coba lagi.",
+      "Download gagal — gambar trait belum termuat.\n\n" +
+        "Refresh halaman (Cmd+Shift+R) lalu coba lagi.",
     );
   } finally {
     btnDownload.disabled = false;
@@ -1771,6 +1781,7 @@ function applyInitialState() {
 }
 
 async function init() {
+  await registerTraitsProxySw();
   loadStoredCustomBackgroundColor();
   try {
     await Promise.all([loadTraitCatalog(), loadStickerCatalog()]);

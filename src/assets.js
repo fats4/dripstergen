@@ -1,50 +1,25 @@
 /**
- * Remote assets: CDN, object storage, or IPFS (via HTTPS gateway).
+ * Remote assets via object storage / CDN (Cloudflare R2).
  *
- * Option A — full base URL (CDN / custom IPFS gateway path):
- *   VITE_ASSETS_BASE_URL=https://gateway.pinata.cloud/ipfs/QmYourFolderCid
- *
- * Option B — IPFS folder CID + gateway (app builds the URL):
- *   VITE_IPFS_CID=QmYourFolderCid
- *   VITE_IPFS_GATEWAY=https://w3s.link
+ *   VITE_ASSETS_BASE_URL=https://assets.mondrips.com
  *
  * Empty = same origin (`/traits/...` from public/ or dist/).
  *
- * Note: browsers cannot load `ipfs://` directly — always use an HTTPS gateway.
- * Download PNG needs CORS on the asset host (R2: scripts/r2-cors.json, IPFS: gateway with CORS).
+ * Production images are loaded via `/traits-proxy/...` (service worker) so canvas
+ * export works without R2 bucket CORS.
  */
+
+const TRAITS_PROXY_PREFIX = "/traits-proxy";
 
 /** @type {string} */
 const EXPLICIT_BASE = (import.meta.env.VITE_ASSETS_BASE_URL ?? "").trim().replace(/\/+$/, "");
 
 /** @type {string} */
-const IPFS_CID = (import.meta.env.VITE_IPFS_CID ?? "").trim();
-
-/** @type {string} */
-const IPFS_GATEWAY = (import.meta.env.VITE_IPFS_GATEWAY ?? "https://w3s.link")
-  .trim()
-  .replace(/\/+$/, "");
-
-/**
- * @returns {string}
- */
-function resolveAssetsBase() {
-  if (EXPLICIT_BASE) return EXPLICIT_BASE;
-  if (IPFS_CID) return `${IPFS_GATEWAY}/ipfs/${IPFS_CID}`;
-  return "";
-}
-
-/** @type {string} */
-export const ASSETS_BASE = resolveAssetsBase();
+export const ASSETS_BASE = EXPLICIT_BASE;
 
 /** @returns {boolean} */
 export function usesRemoteAssets() {
   return ASSETS_BASE.length > 0;
-}
-
-/** @returns {boolean} */
-export function usesIpfsAssets() {
-  return !EXPLICIT_BASE && IPFS_CID.length > 0;
 }
 
 /**
@@ -82,7 +57,9 @@ export function categoryAssetUrl(category, filename) {
   const name = filename.replace(/^\//, "");
   if (name.startsWith("http://") || name.startsWith("https://")) return name;
   if (name.startsWith("/")) return joinAssetPath(name);
-  return joinAssetPath(`/traits/${category}/${name}`);
+  const rel = `/traits/${category}/${name}`;
+  if (usesRemoteAssets()) return `${TRAITS_PROXY_PREFIX}${rel}`;
+  return joinAssetPath(rel);
 }
 
 /**
@@ -118,7 +95,7 @@ export function stickerThumbUrl(fullUrl) {
 }
 
 /**
- * Cross-origin images need CORS on the gateway for canvas export (Download PNG).
+ * Cross-origin images need CORS on the asset host for canvas export (Download PNG).
  * @param {string} url
  * @returns {boolean}
  */
