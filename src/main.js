@@ -906,7 +906,8 @@ function countLoadedLayersInCache(sel, cache) {
     const url = stickerFullUrl(stickerOverlay.index);
     if (url) {
       expected += 1;
-      if (cache.get(url)?.naturalWidth) loaded += 1;
+      const stickerImg = cache.get(url) ?? activeStickerImage;
+      if (stickerImg?.naturalWidth) loaded += 1;
     }
   }
   return { expected, loaded };
@@ -1650,9 +1651,16 @@ async function downloadPng() {
 
     drawComposite(ctx, selection, imageCache, activeStickerImage);
 
-    const blob = await new Promise((resolve) => {
+    let blob = await new Promise((resolve) => {
       exportCanvas.toBlob(resolve, "image/png");
     });
+    if (!blob) {
+      // Redraw preview with CORS images and export from preview canvas.
+      drawComposite(previewCtx, selection, imageCache, activeStickerImage);
+      blob = await new Promise((resolve) => {
+        previewCanvas.toBlob(resolve, "image/png");
+      });
+    }
     if (!blob) {
       throw new Error("tainted canvas");
     }

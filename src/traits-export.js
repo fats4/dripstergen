@@ -17,13 +17,13 @@ const CORS_SETUP_MSG =
  * @returns {Promise<HTMLImageElement>}
  */
 export async function loadExportTraitImage(cache, assetUrl) {
-  const hit = cache.get(assetUrl);
-  if (hit?.naturalWidth) return hit;
-
   if (!usesRemoteAssets()) {
+    const hit = cache.get(assetUrl);
+    if (hit?.naturalWidth) return hit;
     return getCachedImage(cache, assetUrl);
   }
 
+  // Always fetch with CORS for export — preview cache may hold non-CORS (tainted) images.
   try {
     const img = await loadImageElementOnce(assetUrl, true);
     cache.set(assetUrl, img);
