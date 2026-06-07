@@ -433,12 +433,8 @@ function rebuildStickerIdMap() {
 function scrollThumbGridToIndex(index) {
   if (!thumbGrid || index < 0) return;
   requestAnimationFrame(() => {
-    const cols = getGridCols();
+    const { cols, rowHeight } = getThumbGridMetrics();
     const row = Math.floor(index / cols);
-    const gap = 6;
-    const width = thumbGrid.clientWidth || 300;
-    const cell = (width - gap * (cols - 1)) / cols;
-    const rowHeight = cell + gap;
     thumbGrid.scrollTop = row * rowHeight;
     thumbGrid.dispatchEvent(new Event("scroll"));
   });
@@ -468,6 +464,22 @@ function getGridCols() {
   if (window.innerWidth <= 480) return 3;
   if (window.innerWidth <= 640) return 4;
   return 6;
+}
+
+/**
+ * @returns {{ cols: number; gap: number; cell: number; rowHeight: number }}
+ */
+function getThumbGridMetrics() {
+  const cols = getGridCols();
+  const width = thumbGrid?.clientWidth || 300;
+  let gap = 6;
+  if (thumbGrid) {
+    const style = getComputedStyle(thumbGrid);
+    const parsed = Number.parseFloat(style.rowGap || style.gap);
+    if (Number.isFinite(parsed)) gap = parsed;
+  }
+  const cell = (width - gap * (cols - 1)) / cols;
+  return { cols, gap, cell, rowHeight: cell + gap };
 }
 
 /**
@@ -977,6 +989,9 @@ function createThumbCanvas() {
   const px = thumbCanvasPixelSize();
   c.width = px;
   c.height = px;
+  c.style.width = "100%";
+  c.style.height = "100%";
+  c.style.display = "block";
   tctx.imageSmoothingEnabled = true;
   tctx.imageSmoothingQuality = "high";
   const k = px / THUMB;
@@ -1491,11 +1506,7 @@ function mountThumbGrid(count, token, factory) {
 function mountVirtualThumbGrid(count, token, factory) {
   if (!thumbGrid) return;
 
-  const cols = getGridCols();
-  const width = thumbGrid.clientWidth || 300;
-  const gap = 6;
-  const cell = (width - gap * (cols - 1)) / cols;
-  const rowHeight = cell + gap;
+  const { cols, cell, rowHeight } = getThumbGridMetrics();
   const totalRows = Math.ceil(count / cols);
   const viewH = thumbGrid.clientHeight || 400;
   const scrollTop = thumbGrid.scrollTop;
@@ -1525,6 +1536,7 @@ function mountVirtualThumbGrid(count, token, factory) {
   const windowEl = document.createElement("div");
   windowEl.className = "thumb-grid-window";
   windowEl.style.setProperty("--thumb-cols", String(cols));
+  windowEl.style.gridAutoRows = `${cell}px`;
 
   const start = startRow * cols;
   const end = Math.min(count, endRow * cols);
@@ -1677,14 +1689,14 @@ async function downloadPng() {
     URL.revokeObjectURL(url);
   } catch (err) {
     console.error("[download]", err);
-    let msg = "Download gagal.\n\nRefresh halaman (Cmd+Shift+R) lalu coba lagi.";
+    let msg = "Download failed.\n\nHard refresh the page (Cmd+Shift+R) and try again.";
     if (err instanceof Error) {
       if (/fetch|CORS|Failed to load/i.test(err.message)) {
-        msg = `${exportCorsSetupMessage()}\n\nDetail: ${err.message}`;
+        msg = `${exportCorsSetupMessage()}\n\nDetails: ${err.message}`;
       } else if (err.message.startsWith("HTTP ")) {
-        msg = `Download gagal — gambar tidak ditemukan.\n\n${err.message}\n\nRefresh halaman lalu coba lagi.`;
+        msg = `Download failed — image not found.\n\n${err.message}\n\nRefresh the page and try again.`;
       } else if (err.message.includes("layer(s) failed")) {
-        msg = `Download gagal — beberapa layer tidak termuat.\n\n${err.message}\n\nTunggu preview selesai, lalu coba lagi.`;
+        msg = `Download failed — some layers did not load.\n\n${err.message}\n\nWait for the preview to finish, then try again.`;
       }
     } else if (err instanceof TypeError) {
       msg = exportCorsSetupMessage();

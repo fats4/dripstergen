@@ -2,9 +2,9 @@ import { usesRemoteAssets } from "./assets.js";
 import { getCachedImage, loadImageElementOnce, LruImageCache } from "./image-cache.js";
 
 const CORS_SETUP_MSG =
-  "Download butuh CORS di assets.mondrips.com.\n\n" +
+  "Download requires CORS on assets.mondrips.com.\n\n" +
   "R2 bucket → Settings → CORS → paste scripts/r2-cors.json\n" +
-  "Lalu purge cache Cloudflare untuk assets.mondrips.com";
+  "Then purge the Cloudflare cache for assets.mondrips.com";
 
 /**
  * @param {Blob} blob
