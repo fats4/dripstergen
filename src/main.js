@@ -1040,8 +1040,21 @@ async function getImageAlphaBounds(img, cacheKey) {
     return null;
   }
 
-  ctx.drawImage(img, 0, 0, w, h);
-  const data = ctx.getImageData(0, 0, w, h).data;
+  try {
+    ctx.drawImage(img, 0, 0, w, h);
+  } catch {
+    thumbBoundsCache.set(cacheKey, null);
+    return null;
+  }
+
+  let data;
+  try {
+    data = ctx.getImageData(0, 0, w, h).data;
+  } catch {
+    // Cross-origin image without CORS taints the canvas — skip crop, still show thumb.
+    thumbBoundsCache.set(cacheKey, null);
+    return null;
+  }
 
   let minX = w;
   let minY = h;
