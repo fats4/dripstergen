@@ -1194,7 +1194,7 @@ function drawImageOnThumb(c, img, contain = false, crop = null) {
   const tctx = c.getContext("2d");
   if (!tctx || !img.naturalWidth) return;
 
-  const pad = THUMB * 0.08;
+  const pad = THUMB * (crop ? 0.15 : 0.08);
   const box = THUMB - pad * 2;
 
   if (crop) {
@@ -1377,8 +1377,10 @@ function createTraitThumbButton(cat, index, selected, token) {
 
   if (index > 0 && !(cat === "background" && isCustomBackgroundIndex(index))) {
     const fullUrl = traitFullUrl(cat, index);
-    const thumbUrl = fullUrl ? categoryThumbUrl(cat, fullUrl) : null;
-    const opts = { thumbUrl, fullUrl, cropToContent: true };
+    const opts =
+      cat === "background"
+        ? { thumbUrl: null, fullUrl, contain: true }
+        : { thumbUrl: null, fullUrl, cropToContent: true };
     if (!trySyncHydrateThumb(canvas, opts)) {
       btn.classList.add("thumb--loading");
       void hydrateThumbButton(btn, token, () => opts);
