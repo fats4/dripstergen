@@ -67,10 +67,20 @@ export function categoryAssetUrl(category, filename) {
  */
 export function toTraitsProxyUrl(assetUrl) {
   if (!usesRemoteAssets() || !assetUrl) return assetUrl;
+  const path = assetPathFromUrl(assetUrl);
+  return path ? `${TRAITS_PROXY_PREFIX}${path}` : assetUrl;
+}
+
+/**
+ * @param {string} assetUrl
+ * @returns {string | null}
+ */
+export function assetPathFromUrl(assetUrl) {
+  if (!assetUrl) return null;
   const marker = "/traits/";
   const idx = assetUrl.indexOf(marker);
-  if (idx === -1) return assetUrl;
-  return `${TRAITS_PROXY_PREFIX}${assetUrl.slice(idx)}`;
+  if (idx === -1) return null;
+  return assetUrl.slice(idx);
 }
 
 /**
