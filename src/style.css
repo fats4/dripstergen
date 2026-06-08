@@ -92,7 +92,7 @@ body {
 
   .app .header {
     flex-shrink: 0;
-    margin-bottom: 1.35rem;
+    margin-bottom: 2rem;
   }
 
   .main {
@@ -167,7 +167,7 @@ body {
 }
 
 .header {
-  margin-bottom: 1.35rem;
+  margin-bottom: 2rem;
   text-align: center;
 }
 
@@ -208,7 +208,7 @@ body {
 }
 
 .subtitle {
-  margin: 0 0 0.85rem;
+  margin: 0;
   padding: 0;
   font-size: 0.8rem;
   color: var(--muted);
