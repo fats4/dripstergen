@@ -11,14 +11,14 @@ export const CATEGORY_KEYS = [
 
 /**
  * Layer draw order (back → front). Differs from CATEGORY_KEYS (tab UI order).
- * Skin/base on top of background, then clothes, glasses, hat/hair last.
+ * Hat/hair under glasses so frames stay visible on top.
  */
 export const COMPOSITE_ORDER = /** @type {readonly CategoryKey[]} */ ([
   "background",
   "skin",
   "clothes",
-  "glasses",
   "hat",
+  "glasses",
 ]);
 
 /** @type {Record<CategoryKey, string>} */
