@@ -597,10 +597,11 @@ function applyActiveStickerImage() {
 }
 
 function syncStickerOverlayUi() {
-  const on = stickerOverlay.index > 0 && Boolean(activeStickerImage?.naturalWidth);
-  stickerControls?.toggleAttribute("hidden", !on);
-  customOverlayHint?.toggleAttribute("hidden", !on);
-  previewWrap?.classList.toggle("preview-wrap--placeable", on);
+  const hasSticker = stickerOverlay.index > 0 && Boolean(activeStickerImage?.naturalWidth);
+  const onSkrumpeysTab = activeTab === STICKERS_TAB;
+  stickerControls?.toggleAttribute("hidden", !(hasSticker && onSkrumpeysTab));
+  customOverlayHint?.toggleAttribute("hidden", !hasSticker);
+  previewWrap?.classList.toggle("preview-wrap--placeable", hasSticker);
   if (customOverlayScale) {
     customOverlayScale.value = String(Math.round(stickerOverlay.scale * 100));
   }
@@ -1582,6 +1583,7 @@ function renderTabs() {
       renderTabs();
       syncBackgroundColorUi();
       syncStickerSearchUi();
+      syncStickerOverlayUi();
       renderThumbs();
     });
     tabsEl.appendChild(btn);
