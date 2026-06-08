@@ -62,7 +62,7 @@ body {
 
 @media (max-width: 860px) {
   .app {
-    padding: 0.85rem max(1.2rem, env(safe-area-inset-left)) 0.95rem max(1.2rem, env(safe-area-inset-right));
+    padding: 1.1rem max(1.2rem, env(safe-area-inset-left)) 0.95rem max(1.2rem, env(safe-area-inset-right));
   }
 }
 
@@ -92,7 +92,8 @@ body {
 
   .app .header {
     flex-shrink: 0;
-    margin-bottom: 2rem;
+    margin-top: 1rem;
+    margin-bottom: 1.35rem;
   }
 
   .main {
@@ -167,8 +168,15 @@ body {
 }
 
 .header {
-  margin-bottom: 2rem;
+  margin-top: 1rem;
+  margin-bottom: 1.35rem;
   text-align: center;
+}
+
+@media (max-width: 860px) {
+  .header {
+    margin-top: 1.25rem;
+  }
 }
 
 .title {
