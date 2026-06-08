@@ -51,15 +51,21 @@ if (fileCount === 0) {
 fs.rmSync(outRoot, { recursive: true, force: true });
 fs.cpSync(src, dest, { recursive: true });
 
-const scanPath = path.join(dest, "_scan.json");
-try {
-  execSync(`node scripts/build-assets-manifest.mjs --root=${dest} --out=${scanPath}`, {
-    stdio: "inherit",
-    cwd: process.cwd(),
-  });
-} catch {
-  console.warn("prepare-r2-upload: could not write _scan.json");
+if (!fromUpdate) {
+  const scanPath = path.join(dest, "_scan.json");
+  try {
+    execSync(`node scripts/build-assets-manifest.mjs --root=${dest} --out=${scanPath}`, {
+      stdio: "inherit",
+      cwd: process.cwd(),
+    });
+  } catch {
+    console.warn("prepare-r2-upload: could not write _scan.json");
+  }
+} else {
+  const scanPath = path.join(dest, "_scan.json");
+  if (fs.existsSync(scanPath)) fs.unlinkSync(scanPath);
+  console.log("prepare-r2-upload: skipped _scan.json (incremental update — catalog rebuilt after upload)");
 }
 
 console.log(`prepare-r2-upload: ready at ${dest} (${fileCount} files, source: ${fromUpdate ? "update/" : "public/"})`);
-console.log("Next: npm run upload:r2");
+console.log(fromUpdate ? "Next: npm run upload:update" : "Next: npm run upload:r2");

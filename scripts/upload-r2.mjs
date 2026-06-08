@@ -18,10 +18,14 @@
  *   npm run upload:r2
  *   npm run upload:r2 -- --dir=./r2-upload/traits
  *   npm run upload:r2 -- --dry-run
+ *   npm run upload:r2 -- --rebuild-scan   # after upload, rebuild _scan.json from bucket
+ *
+ * By default _scan.json is NOT uploaded (use --with-scan). Prefer --rebuild-scan after incremental updates.
  */
 
 import fs from "node:fs";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 function loadDotEnv() {
@@ -56,6 +60,8 @@ const MIME = {
 };
 
 const dryRun = process.argv.includes("--dry-run");
+const withScan = process.argv.includes("--with-scan");
+const rebuildScan = process.argv.includes("--rebuild-scan");
 const dirArg = process.argv.find((a) => a.startsWith("--dir="));
 const srcRoot = dirArg
   ? path.resolve(dirArg.split("=")[1])
@@ -91,6 +97,7 @@ function walk(dir) {
       continue;
     }
     const rel = path.relative(srcRoot, abs).split(path.sep).join("/");
+    if (!withScan && (rel === "_scan.json" || rel === "manifest.json")) return;
     const key = keyPrefix ? `${keyPrefix}/${rel}` : rel;
     const ext = path.extname(name).toLowerCase();
     const contentType = MIME[ext] ?? "application/octet-stream";
@@ -156,6 +163,16 @@ async function worker() {
 
 await Promise.all(Array.from({ length: concurrency }, worker));
 console.log(failed ? `\nupload-r2: done with ${failed} error(s).` : "\nupload-r2: done.");
+
+if (failed) process.exit(1);
+
+if (rebuildScan && !dryRun) {
+  console.log("\nupload-r2: rebuilding _scan.json from bucket...");
+  execSync("node scripts/rebuild-scan-from-r2.mjs --upload", {
+    stdio: "inherit",
+    cwd: process.cwd(),
+  });
+}
 
 const publicUrl = process.env.R2_PUBLIC_URL?.trim().replace(/\/+$/, "");
 if (publicUrl) {
