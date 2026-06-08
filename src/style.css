@@ -801,6 +801,10 @@ body {
   background: inherit;
 }
 
+.sticker-controls[hidden] {
+  display: none !important;
+}
+
 .custom-overlay-scale {
   display: inline-flex;
   align-items: center;
