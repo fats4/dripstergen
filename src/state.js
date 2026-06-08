@@ -41,7 +41,7 @@ export const PICKER_TAB_KEYS = [...CATEGORY_KEYS, STICKERS_TAB];
 /** @type {Record<PickerTabKey, string>} */
 export const PICKER_TAB_LABELS = {
   ...CATEGORY_LABELS,
-  [STICKERS_TAB]: "stickers",
+  [STICKERS_TAB]: "skrumpeys",
 };
 
 /** @typedef {Record<CategoryKey, number>} Counts */
