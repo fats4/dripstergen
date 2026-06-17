@@ -520,9 +520,18 @@ async function refreshActiveStickerImage() {
   }
 }
 
+function pickRandomSkinIndex() {
+  const n = traitCatalog.skin.length;
+  return n > 0 ? 1 + Math.floor(Math.random() * n) : 0;
+}
+
 function clampSelection() {
   const counts = getCounts();
   for (const key of CATEGORY_KEYS) {
+    if (key === "skin" && traitCatalog.skin.length > 0) {
+      selection[key] = Math.max(1, Math.min(selection[key], traitCatalog.skin.length));
+      continue;
+    }
     let max = counts[key] - 1;
     if (key === "background" && !isCustomBackgroundIndex(selection.background)) {
       max = getBackgroundPickerCount() - 1;
@@ -1610,8 +1619,16 @@ function renderThumbs() {
   }
 
   const cat = /** @type {CategoryKey} */ (activeTab);
-  const count = cat === "background" ? getCounts().background : getCounts()[cat];
-  const factory = (i) => createTraitThumbButton(cat, i, selection[cat] === i, token);
+  let count;
+  /** @type {(i: number) => HTMLButtonElement} */
+  let factory;
+  if (cat === "skin") {
+    count = traitCatalog.skin.length;
+    factory = (i) => createTraitThumbButton(cat, i + 1, selection.skin === i + 1, token);
+  } else {
+    count = cat === "background" ? getCounts().background : getCounts()[cat];
+    factory = (i) => createTraitThumbButton(cat, i, selection[cat] === i, token);
+  }
 
   if (count > VIRTUAL_THUMB_THRESHOLD) {
     mountVirtualThumbGrid(count, token, factory);
@@ -1625,6 +1642,10 @@ async function randomize() {
   /** @type {Selection} */
   const next = { ...selection };
   for (const key of CATEGORY_KEYS) {
+    if (key === "skin") {
+      next.skin = pickRandomSkinIndex();
+      continue;
+    }
     const n = key === "background" ? getBackgroundPickerCount() : counts[key];
     next[key] = Math.floor(Math.random() * n);
   }
@@ -1640,6 +1661,7 @@ async function randomize() {
 
 async function resetSelection() {
   selection = defaultSelection();
+  selection.skin = pickRandomSkinIndex();
   customBackgroundColor = defaultCustomBackgroundColor();
   persistCustomBackgroundColor();
   stickerOverlay = defaultStickerOverlay();
@@ -1836,10 +1858,7 @@ btnStickerSearchApply?.addEventListener("click", () => {
 
 /** Random skin only; clothes, hat, glasses, background, and sticker start empty. */
 function applyInitialState() {
-  const n = traitCatalog.skin.length;
-  if (n > 0) {
-    selection = { ...selection, skin: 1 + Math.floor(Math.random() * n) };
-  }
+  selection = { ...selection, skin: pickRandomSkinIndex() };
   stickerOverlay = defaultStickerOverlay();
   applyActiveStickerImage();
 }

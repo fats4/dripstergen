@@ -70,6 +70,10 @@ export function selectionFromSeed(seed, counts) {
   for (const key of CATEGORY_KEYS) {
     x = (x * 48271) % 2147483647;
     /** background: counts usually exclude custom color slot (none + images only) */
+    if (key === "skin" && counts[key] > 1) {
+      s[key] = 1 + (x % (counts[key] - 1));
+      continue;
+    }
     const n = Math.max(1, counts[key]);
     s[key] = x % n;
   }
