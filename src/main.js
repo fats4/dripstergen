@@ -1,5 +1,5 @@
 import "./style.css";
-import bundledCollabManifest from "../public/traits/_collab.json";
+import bundledCollabManifest from "./collab-manifest.json";
 import {
   categoryAssetUrl,
   categoryThumbUrl,

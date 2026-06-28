@@ -21,7 +21,7 @@ const includeCollab = process.argv.includes("--include-collab");
 /** @returns {Partial<Record<string, Set<string>>>} */
 function loadCollabBlockedFilenames() {
   if (includeCollab) return {};
-  const collabPath = path.join(process.cwd(), "public", "traits", "_collab.json");
+  const collabPath = path.join(process.cwd(), "src", "collab-manifest.json");
   /** @type {Partial<Record<string, Set<string>>>} */
   const blocked = Object.fromEntries(COLLAB_LAYER_CATEGORIES.map((c) => [c, new Set()]));
   if (!fs.existsSync(collabPath)) return blocked;

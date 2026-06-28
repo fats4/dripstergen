@@ -1,0 +1,10 @@
+{
+  "monigga": {
+    "label": "MONIGGA",
+    "accent": "#a78bfa",
+    "traits": {
+      "clothes": ["DSO_CHAIN.webp", "Earring.webp", "Tanktop.webp"],
+      "hat": ["Durag.webp"]
+    }
+  }
+}
