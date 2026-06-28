@@ -1,4 +1,5 @@
 import "./style.css";
+import bundledCollabManifest from "../public/traits/_collab.json";
 import {
   categoryAssetUrl,
   categoryThumbUrl,
@@ -429,7 +430,7 @@ async function applyCollabManifest(catalog) {
   if (!collabEnabled) collabSelection = defaultCollabSelection();
 
   /** @type {Record<string, import('./state.js').CollabPartnerDef>} */
-  let manifest = {};
+  let manifest = { ...bundledCollabManifest };
   const collabUrls =
     import.meta.env.DEV && usesRemoteAssets()
       ? ["/traits/_collab.json", traitsCollabUrl()]
@@ -440,9 +441,12 @@ async function applyCollabManifest(catalog) {
     try {
       const res = await fetch(url, { cache: usesRemoteAssets() ? "default" : "no-store" });
       if (res.ok) {
-        manifest = /** @type {Record<string, import('./state.js').CollabPartnerDef>} */ (
-          await res.json()
-        );
+        manifest = {
+          ...bundledCollabManifest,
+          .../** @type {Record<string, import('./state.js').CollabPartnerDef>} */ (
+            await res.json()
+          ),
+        };
         break;
       }
     } catch {
