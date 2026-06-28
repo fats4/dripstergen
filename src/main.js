@@ -2,10 +2,9 @@ import "./style.css";
 import {
   categoryAssetUrl,
   categoryThumbUrl,
-  stickerAssetUrl,
-  stickerThumbUrl,
   traitsManifestUrl,
   traitsScanUrl,
+  traitsCollabUrl,
   usesRemoteAssets,
 } from "./assets.js";
 import { getCachedImage, LruImageCache } from "./image-cache.js";
@@ -16,7 +15,12 @@ import {
   CUSTOM_OVERLAY_STORAGE_KEY,
   PICKER_TAB_KEYS,
   PICKER_TAB_LABELS,
+  COLLAB_LAYER_KEYS,
+  isCollabTraitsEnabled,
   STICKERS_TAB,
+  STICKER_SOURCE_KEYS,
+  STICKER_SOURCE_LABELS,
+  defaultCollabSelection,
   clampStickerOverlay,
   CUSTOM_BG_COLOR_STORAGE_KEY,
   defaultCustomBackgroundColor,
@@ -33,6 +37,9 @@ import {
 /** @typedef {import('./state.js').Selection} Selection */
 /** @typedef {import('./state.js').Counts} Counts */
 /** @typedef {import('./state.js').StickerOverlay} StickerOverlay */
+/** @typedef {import('./state.js').StickerSourceKey} StickerSourceKey */
+/** @typedef {import('./state.js').CollabSelection} CollabSelection */
+/** @typedef {import('./state.js').CollabPartnerKey} CollabPartnerKey */
 
 /** Internal preview & download resolution — higher = sharper (assets ideally ≥ this) */
 const PREVIEW = 1024;
@@ -160,6 +167,7 @@ app.innerHTML = `
         </div>
       </div>
       <nav class="tabs" id="tabs" role="tablist"></nav>
+      <nav class="sub-tabs sticker-sub-tabs" id="stickerSubTabs" role="tablist" hidden></nav>
       <div class="background-color-bar" id="backgroundColorBar" hidden>
         <div class="background-color-panel">
           <div class="background-color-panel__intro">
@@ -231,11 +239,46 @@ const traitCatalog = {
   skin: [],
 };
 
-/** @type {string[]} */
-const stickerCatalog = [];
+/** @type {Record<StickerSourceKey, string[]>} */
+const stickerCatalogBySource = {
+  skrumpeys: [],
+  monigga: [],
+};
 
-/** Filename stem (e.g. "755") → picker index (1-based) */
-const stickerIdToPickerIndex = new Map();
+/** @type {Record<StickerSourceKey, Map<string, number>>} */
+const stickerIdToPickerIndexBySource = {
+  skrumpeys: new Map(),
+  monigga: new Map(),
+};
+
+/** Scan/manifest category per sticker sub-tab */
+const STICKER_SOURCE_SCAN_KEY = {
+  skrumpeys: "stickers",
+  monigga: "monigga",
+};
+
+/** @type {CollabPartnerKey[]} */
+let collabPartnerKeys = [];
+
+/** @type {Record<string, { label: string; accent: string; clothes: string[]; hat: string[] }>} */
+let collabCatalog = {};
+
+/** @type {Record<CategoryKey, Set<string>>} */
+const collabFilenameSet = {
+  background: new Set(),
+  clothes: new Set(),
+  glasses: new Set(),
+  hat: new Set(),
+  skin: new Set(),
+};
+
+/**
+ * @typedef {{ collabId: CollabPartnerKey; category: CategoryKey; index: number; url: string; label: string }} CollabPickerEntry
+ * @typedef {{ kind: "empty" }} EmptyPickerEntry
+ * @typedef {{ kind: "regular"; index: number }} RegularPickerEntry
+ * @typedef {{ kind: "collab" } & CollabPickerEntry} CollabThumbEntry
+ * @typedef {EmptyPickerEntry | RegularPickerEntry | CollabThumbEntry} CategoryPickerEntry
+ */
 
 /** From `src/traits/<category>/*` — bundled by Vite (`?url` = stable URL string) */
 const traitGlobModules = import.meta.glob("./traits/**/*.{png,webp,jpg,jpeg,svg}", {
@@ -362,6 +405,213 @@ async function loadTraitCatalog() {
   for (const key of CATEGORY_KEYS) {
     traitCatalog[key] = dedupeTraitUrls([...byCat[key]]);
   }
+
+  await applyCollabManifest(traitCatalog);
+}
+
+/**
+ * @param {string} url
+ * @returns {string}
+ */
+function urlBasename(url) {
+  return (url.split("/").pop() ?? "").split("?")[0];
+}
+
+/**
+ * Load collab manifest, build collab catalogs, and strip collab files from regular trait grids.
+ * @param {Record<CategoryKey, string[]>} catalog
+ */
+async function applyCollabManifest(catalog) {
+  const collabEnabled = isCollabTraitsEnabled();
+  collabPartnerKeys = [];
+  collabCatalog = {};
+  for (const key of CATEGORY_KEYS) collabFilenameSet[key].clear();
+  if (!collabEnabled) collabSelection = defaultCollabSelection();
+
+  /** @type {Record<string, import('./state.js').CollabPartnerDef>} */
+  let manifest = {};
+  const collabUrls =
+    import.meta.env.DEV && usesRemoteAssets()
+      ? ["/traits/_collab.json", traitsCollabUrl()]
+      : usesRemoteAssets()
+        ? [traitsCollabUrl(), "/traits/_collab.json"]
+        : [traitsCollabUrl()];
+  for (const url of collabUrls) {
+    try {
+      const res = await fetch(url, { cache: usesRemoteAssets() ? "default" : "no-store" });
+      if (res.ok) {
+        manifest = /** @type {Record<string, import('./state.js').CollabPartnerDef>} */ (
+          await res.json()
+        );
+        break;
+      }
+    } catch {
+      /* try next source */
+    }
+  }
+
+  /** @type {Map<string, string>} filenameLower → url */
+  const urlByFilename = new Map();
+  for (const cat of COLLAB_LAYER_KEYS) {
+    for (const url of catalog[cat]) {
+      urlByFilename.set(urlBasename(url).toLowerCase(), url);
+    }
+  }
+
+  for (const [id, def] of Object.entries(manifest)) {
+    if (!def || typeof def !== "object") continue;
+    const label = typeof def.label === "string" ? def.label : id;
+    const accent = typeof def.accent === "string" ? def.accent : "#a78bfa";
+    /** @type {{ label: string; accent: string; clothes: string[]; hat: string[] }} */
+    const partner = { label, accent, clothes: [], hat: [] };
+
+    for (const cat of COLLAB_LAYER_KEYS) {
+      const list = def.traits?.[cat];
+      if (!Array.isArray(list)) continue;
+      for (const file of list) {
+        if (typeof file !== "string" || !file) continue;
+        const url = urlByFilename.get(file.toLowerCase()) ?? categoryAssetUrl(cat, file);
+        collabFilenameSet[cat].add(file.toLowerCase());
+        if (collabEnabled) partner[cat].push(url);
+      }
+    }
+
+    if (!collabEnabled || partner.clothes.length + partner.hat.length === 0) continue;
+    collabCatalog[id] = partner;
+    collabPartnerKeys.push(/** @type {CollabPartnerKey} */ (id));
+  }
+
+  for (const cat of COLLAB_LAYER_KEYS) {
+    const blocked = collabFilenameSet[cat];
+    if (blocked.size === 0) continue;
+    catalog[cat] = catalog[cat].filter((url) => !blocked.has(urlBasename(url).toLowerCase()));
+  }
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @returns {CategoryPickerEntry[]}
+ */
+function getCategoryPickerEntries(cat) {
+  /** @type {CategoryPickerEntry[]} */
+  const entries = [{ kind: "empty" }];
+  for (let i = 0; i < traitCatalog[cat].length; i++) {
+    entries.push({ kind: "regular", index: i + 1 });
+  }
+  if (!COLLAB_LAYER_KEYS.includes(cat)) return entries;
+  for (const partnerId of collabPartnerKeys) {
+    const urls = collabCatalog[partnerId][cat];
+    for (let i = 0; i < urls.length; i++) {
+      entries.push({
+        kind: "collab",
+        collabId: partnerId,
+        category: cat,
+        index: i + 1,
+        url: urls[i],
+        label: urlBasename(urls[i]).replace(/\.[^.]+$/i, ""),
+      });
+    }
+  }
+  return entries;
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @param {CategoryPickerEntry} entry
+ * @returns {boolean}
+ */
+function isCategoryEntrySelected(cat, entry) {
+  if (entry.kind === "empty") {
+    return selection[cat] === 0 && collabSelection[cat] === 0;
+  }
+  if (entry.kind === "regular") {
+    return selection[cat] === entry.index && collabSelection[cat] === 0;
+  }
+  return collabSelection.id === entry.collabId && collabSelection[cat] === entry.index;
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @param {CategoryPickerEntry} entry
+ */
+async function onCategoryEntryClick(cat, entry) {
+  /** @type {string | null} */
+  let prefetchUrl = null;
+  if (entry.kind === "empty") {
+    selection = { ...selection, [cat]: 0 };
+    clearCollabForCategory(cat);
+  } else if (entry.kind === "regular") {
+    clearCollabForCategory(cat);
+    selection = { ...selection, [cat]: entry.index };
+    prefetchUrl = traitFullUrl(cat, entry.index);
+  } else {
+    const wasSelected = isCategoryEntrySelected(cat, entry);
+    if (wasSelected) {
+      collabSelection = { ...collabSelection, [cat]: 0 };
+      if (collabSelection.clothes === 0 && collabSelection.hat === 0) {
+        collabSelection = { ...collabSelection, id: null };
+      }
+    } else {
+      collabSelection = { ...collabSelection, id: entry.collabId, [cat]: entry.index };
+      selection = { ...selection, [cat]: 0 };
+      prefetchUrl = entry.url;
+    }
+  }
+  syncSeed();
+  renderThumbs();
+  if (prefetchUrl) await getCachedImage(imageCache, prefetchUrl).catch(() => null);
+  await renderPreview();
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @param {CategoryPickerEntry} entry
+ * @param {boolean} selected
+ * @param {number} token
+ * @returns {HTMLButtonElement}
+ */
+function createCategoryThumbButton(cat, entry, selected, token) {
+  if (entry.kind === "empty") {
+    return createTraitThumbButton(cat, 0, selected, token);
+  }
+  if (entry.kind === "regular") {
+    return createTraitThumbButton(cat, entry.index, selected, token);
+  }
+  return createCollabThumbButton(entry, selected, token);
+}
+
+/**
+ * @param {CollabPartnerKey} collabId
+ * @param {CategoryKey} cat
+ * @param {number} pickerIndex
+ * @returns {string | null}
+ */
+function collabFullUrl(collabId, cat, pickerIndex) {
+  if (pickerIndex <= 0) return null;
+  return collabCatalog[collabId]?.[cat]?.[pickerIndex - 1] ?? null;
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @param {number} selIndex
+ * @returns {string | null}
+ */
+function resolveLayerUrl(cat, selIndex) {
+  if (isCollabTraitsEnabled() && COLLAB_LAYER_KEYS.includes(cat) && collabSelection.id) {
+    const collabIdx = collabSelection[/** @type {"clothes"|"hat"} */ (cat)];
+    if (collabIdx > 0) {
+      const url = collabFullUrl(collabSelection.id, cat, collabIdx);
+      if (url) return url;
+    }
+  }
+  return traitFullUrl(cat, selIndex);
+}
+
+function clearCollabForCategory(cat) {
+  if (!COLLAB_LAYER_KEYS.includes(cat)) return;
+  const next = { ...collabSelection, [cat]: 0 };
+  if (next.clothes === 0 && next.hat === 0) next.id = null;
+  collabSelection = next;
 }
 
 /**
@@ -375,12 +625,28 @@ function traitFullUrl(cat, pickerIndex) {
 }
 
 /**
+ * @param {StickerSourceKey} source
  * @param {number} pickerIndex
  * @returns {string | null}
  */
-function stickerFullUrl(pickerIndex) {
+function stickerFullUrl(source, pickerIndex) {
   if (pickerIndex <= 0) return null;
-  return stickerCatalog[pickerIndex - 1] ?? null;
+  return stickerCatalogBySource[source][pickerIndex - 1] ?? null;
+}
+
+/** @returns {string | null} */
+function activeStickerFullUrl() {
+  return stickerFullUrl(stickerOverlay.source, stickerOverlay.index);
+}
+
+/**
+ * @param {StickerSourceKey} source
+ * @param {string} filename
+ * @returns {string}
+ */
+function stickerSourceAssetUrl(source, filename) {
+  const category = STICKER_SOURCE_SCAN_KEY[source];
+  return categoryAssetUrl(category, filename);
 }
 
 /**
@@ -393,11 +659,12 @@ function stickerFilenameStem(url) {
 }
 
 /**
+ * @param {StickerSourceKey} source
  * @param {number} pickerIndex
  * @returns {string}
  */
-function stickerIdFromPickerIndex(pickerIndex) {
-  const url = stickerFullUrl(pickerIndex);
+function stickerIdFromPickerIndex(source, pickerIndex) {
+  const url = stickerFullUrl(source, pickerIndex);
   return url ? stickerFilenameStem(url) : "";
 }
 
@@ -410,20 +677,25 @@ function normalizeStickerIdQuery(query) {
 }
 
 /**
+ * @param {StickerSourceKey} source
  * @param {string} query
  * @returns {number | null}
  */
-function findStickerPickerIndexById(query) {
+function findStickerPickerIndexById(source, query) {
   const id = normalizeStickerIdQuery(query);
   if (!id) return null;
-  return stickerIdToPickerIndex.get(id) ?? null;
+  return stickerIdToPickerIndexBySource[source].get(id) ?? null;
 }
 
-function rebuildStickerIdMap() {
-  stickerIdToPickerIndex.clear();
-  for (let i = 0; i < stickerCatalog.length; i++) {
-    const stem = stickerFilenameStem(stickerCatalog[i]);
-    if (stem) stickerIdToPickerIndex.set(stem, i + 1);
+function rebuildStickerIdMaps() {
+  for (const source of STICKER_SOURCE_KEYS) {
+    const map = stickerIdToPickerIndexBySource[source];
+    map.clear();
+    const catalog = stickerCatalogBySource[source];
+    for (let i = 0; i < catalog.length; i++) {
+      const stem = stickerFilenameStem(catalog[i]);
+      if (stem) map.set(stem, i + 1);
+    }
   }
 }
 
@@ -496,7 +768,7 @@ async function prefetchSelectionLayers(sel = selection) {
   const urls = [];
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
-    const url = traitFullUrl(key, sel[key]);
+    const url = resolveLayerUrl(key, sel[key]);
     if (url) urls.push(url);
   }
   await Promise.all(
@@ -508,7 +780,7 @@ async function prefetchSelectionLayers(sel = selection) {
  * @returns {Promise<void>}
  */
 async function refreshActiveStickerImage() {
-  const url = stickerFullUrl(stickerOverlay.index);
+  const url = activeStickerFullUrl();
   if (!url) {
     activeStickerImage = null;
     return;
@@ -542,8 +814,12 @@ function clampSelection() {
 
 /** @type {Selection} */
 let selection = defaultSelection();
+/** @type {CollabSelection} */
+let collabSelection = defaultCollabSelection();
 /** @type {PickerTabKey} */
 let activeTab = "skin";
+/** @type {StickerSourceKey} */
+let activeStickerSubTab = "skrumpeys";
 /** @type {string} */
 let customBackgroundColor = defaultCustomBackgroundColor();
 
@@ -559,6 +835,7 @@ const previewCtx = previewCanvas.getContext("2d");
 if (!previewCtx) throw new Error("2d context");
 
 const tabsEl = document.getElementById("tabs");
+const stickerSubTabsEl = document.getElementById("stickerSubTabs");
 const backgroundColorBar = document.getElementById("backgroundColorBar");
 const backgroundColorInput = /** @type {HTMLInputElement | null} */ (
   document.getElementById("backgroundColorInput")
@@ -592,8 +869,16 @@ const customOverlayHint = document.getElementById("customOverlayHint");
 const btnCustomReset = document.getElementById("btnCustomReset");
 const THEME_KEY = "dripster-theme";
 
+function getActiveStickerCatalog() {
+  return stickerCatalogBySource[activeStickerSubTab];
+}
+
 function getStickerCount() {
-  return Math.max(1, stickerCatalog.length + 1);
+  return Math.max(1, getActiveStickerCatalog().length + 1);
+}
+
+function isStickerSelectedInSubTab(source, index) {
+  return stickerOverlay.source === source && stickerOverlay.index === index;
 }
 
 function persistStickerOverlay() {
@@ -601,14 +886,14 @@ function persistStickerOverlay() {
 }
 
 function applyActiveStickerImage() {
-  const url = stickerFullUrl(stickerOverlay.index);
+  const url = activeStickerFullUrl();
   activeStickerImage = url ? imageCache.get(url) ?? null : null;
 }
 
 function syncStickerOverlayUi() {
   const hasSticker = stickerOverlay.index > 0 && Boolean(activeStickerImage?.naturalWidth);
-  const onSkrumpeysTab = activeTab === STICKERS_TAB;
-  stickerControls?.toggleAttribute("hidden", !(hasSticker && onSkrumpeysTab));
+  const onStickerTab = activeTab === STICKERS_TAB;
+  stickerControls?.toggleAttribute("hidden", !(hasSticker && onStickerTab));
   customOverlayHint?.toggleAttribute("hidden", !hasSticker);
   previewWrap?.classList.toggle("preview-wrap--placeable", hasSticker);
   if (customOverlayScale) {
@@ -683,14 +968,22 @@ function loadStoredStickerOverlay() {
  * @returns {Promise<void>}
  */
 async function loadStickerCatalog() {
-  const urls = new Set();
+  /** @type {Record<StickerSourceKey, Set<string>>} */
+  const bySource = {
+    skrumpeys: new Set(),
+    monigga: new Set(),
+  };
 
   if (!usesRemoteAssets()) {
     for (const p of Object.keys(traitGlobModules).sort()) {
-      if (!/^\.\/traits\/stickers\/[^/]+$/i.test(p)) continue;
+      const skrumpeyMatch = p.match(/^\.\/traits\/stickers\/[^/]+$/i);
+      const moniggaMatch = p.match(/^\.\/traits\/monigga\/[^/]+$/i);
+      if (!skrumpeyMatch && !moniggaMatch) continue;
       const raw = traitGlobModules[p];
       const url = typeof raw === "string" ? raw : moduleToUrl(raw);
-      if (url) urls.add(url);
+      if (!url) continue;
+      if (skrumpeyMatch) bySource.skrumpeys.add(url);
+      if (moniggaMatch) bySource.monigga.add(url);
     }
   }
 
@@ -699,11 +992,13 @@ async function loadStickerCatalog() {
     if (res.ok) {
       /** @type {Partial<Record<string, unknown>>} */
       const scan = await res.json();
-      const list = scan.stickers;
-      if (Array.isArray(list)) {
+      for (const source of STICKER_SOURCE_KEYS) {
+        const scanKey = STICKER_SOURCE_SCAN_KEY[source];
+        const list = scan[scanKey];
+        if (!Array.isArray(list)) continue;
         for (const name of list) {
           if (typeof name === "string" && name) {
-            urls.add(stickerAssetUrl(name));
+            bySource[source].add(stickerSourceAssetUrl(source, name));
           }
         }
       }
@@ -717,11 +1012,13 @@ async function loadStickerCatalog() {
     if (res.ok) {
       /** @type {Partial<Record<string, unknown>>} */
       const manifest = await res.json();
-      const list = manifest.stickers;
-      if (Array.isArray(list)) {
+      for (const source of STICKER_SOURCE_KEYS) {
+        const scanKey = STICKER_SOURCE_SCAN_KEY[source];
+        const list = manifest[scanKey];
+        if (!Array.isArray(list)) continue;
         for (const entry of list) {
           if (typeof entry !== "string" || !entry) continue;
-          urls.add(stickerAssetUrl(entry));
+          bySource[source].add(stickerSourceAssetUrl(source, entry));
         }
       }
     }
@@ -729,13 +1026,16 @@ async function loadStickerCatalog() {
     /* manifest optional */
   }
 
-  stickerCatalog.length = 0;
-  stickerCatalog.push(...dedupeTraitUrls([...urls]));
-  rebuildStickerIdMap();
+  for (const source of STICKER_SOURCE_KEYS) {
+    stickerCatalogBySource[source].length = 0;
+    stickerCatalogBySource[source].push(...dedupeTraitUrls([...bySource[source]]));
+  }
+  rebuildStickerIdMaps();
 }
 
 function clampStickerSelection() {
-  stickerOverlay = clampStickerOverlay(stickerOverlay, stickerCatalog.length);
+  const catalogLen = stickerCatalogBySource[stickerOverlay.source]?.length ?? 0;
+  stickerOverlay = clampStickerOverlay(stickerOverlay, catalogLen);
   applyActiveStickerImage();
 }
 
@@ -801,7 +1101,11 @@ function syncStickerSearchUi() {
     return;
   }
   if (stickerSearchInput && document.activeElement !== stickerSearchInput) {
-    stickerSearchInput.value = stickerIdFromPickerIndex(stickerOverlay.index);
+    const showId =
+      stickerOverlay.index > 0 && stickerOverlay.source === activeStickerSubTab
+        ? stickerIdFromPickerIndex(activeStickerSubTab, stickerOverlay.index)
+        : "";
+    stickerSearchInput.value = showId;
   }
 }
 
@@ -885,7 +1189,7 @@ function drawComposite(
   sel,
   cache = imageCache,
   stickerImg = activeStickerImage,
-  resolveUrl = traitFullUrl,
+  resolveUrl = resolveLayerUrl,
 ) {
   ctx.clearRect(0, 0, PREVIEW, PREVIEW);
 
@@ -926,13 +1230,13 @@ function countLoadedLayersInCache(sel, cache) {
   let loaded = 0;
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
-    const url = traitFullUrl(key, sel[key]);
+    const url = resolveLayerUrl(key, sel[key]);
     if (!url) continue;
     expected += 1;
     if (cache.get(url)?.naturalWidth) loaded += 1;
   }
   if (stickerOverlay.index > 0) {
-    const url = stickerFullUrl(stickerOverlay.index);
+    const url = activeStickerFullUrl();
     if (url) {
       expected += 1;
       if (cache.get(url)?.naturalWidth) loaded += 1;
@@ -952,14 +1256,14 @@ async function loadExportLayers(sel = selection) {
   const jobs = [];
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
-    const url = traitFullUrl(key, sel[key]);
+    const url = resolveLayerUrl(key, sel[key]);
     if (!url) continue;
     jobs.push(loadExportTraitImage(exportImageCache, url));
   }
 
   let stickerImg = null;
   if (stickerOverlay.index > 0) {
-    const url = stickerFullUrl(stickerOverlay.index);
+    const url = activeStickerFullUrl();
     if (url) {
       jobs.push(
         loadExportTraitImage(exportImageCache, url).then((img) => {
@@ -1413,6 +1717,9 @@ function createTraitThumbButton(cat, index, selected, token) {
  * @param {number} index
  */
 async function onTraitThumbClick(cat, index) {
+  if (index > 0 && COLLAB_LAYER_KEYS.includes(cat)) {
+    clearCollabForCategory(cat);
+  }
   selection = { ...selection, [cat]: index };
   syncSeed();
   renderThumbs();
@@ -1421,9 +1728,43 @@ async function onTraitThumbClick(cat, index) {
     await renderPreview();
     return;
   }
-  const url = traitFullUrl(cat, index);
+  const url = resolveLayerUrl(cat, index);
   if (url) await getCachedImage(imageCache, url).catch(() => null);
   await renderPreview();
+}
+
+/**
+ * @param {CollabThumbEntry} entry
+ * @param {boolean} selected
+ * @param {number} token
+ * @returns {HTMLButtonElement}
+ */
+function createCollabThumbButton(entry, selected, token) {
+  const meta = collabCatalog[entry.collabId];
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "thumb thumb--collab-labeled";
+  btn.setAttribute("aria-selected", selected ? "true" : "false");
+  btn.title = `${meta?.label ?? entry.collabId} · ${entry.label}`;
+
+  const canvas = createThumbCanvas();
+  btn.appendChild(canvas);
+
+  const brand = document.createElement("span");
+  brand.className = "thumb-collab-brand";
+  brand.textContent = meta?.label ?? entry.collabId;
+  btn.appendChild(brand);
+
+  const opts = { thumbUrl: null, fullUrl: entry.url, cropToContent: true };
+  if (!trySyncHydrateThumb(canvas, opts)) {
+    btn.classList.add("thumb--loading");
+    void hydrateThumbButton(btn, token, () => opts);
+  }
+
+  btn.addEventListener("click", () => {
+    void onCategoryEntryClick(entry.category, entry);
+  });
+  return btn;
 }
 
 /**
@@ -1446,7 +1787,7 @@ function createStickerThumbButton(index, selected, token) {
   btn.appendChild(canvas);
 
   if (index > 0) {
-    const fullUrl = stickerFullUrl(index);
+    const fullUrl = stickerFullUrl(activeStickerSubTab, index);
     const opts = { thumbUrl: null, fullUrl, contain: true };
     if (!trySyncHydrateThumb(canvas, opts)) {
       btn.classList.add("thumb--loading");
@@ -1464,12 +1805,13 @@ function createStickerThumbButton(index, selected, token) {
  * @param {number} index
  */
 async function onStickerThumbClick(index) {
-  stickerOverlay = { ...stickerOverlay, index };
+  stickerOverlay = { ...stickerOverlay, source: activeStickerSubTab, index };
   await refreshActiveStickerImage();
   persistStickerOverlay();
   syncStickerOverlayUi();
   if (stickerSearchInput) {
-    stickerSearchInput.value = stickerIdFromPickerIndex(index);
+    stickerSearchInput.value =
+      index > 0 ? stickerIdFromPickerIndex(activeStickerSubTab, index) : "";
     setStickerSearchFeedback("");
   }
   renderThumbs();
@@ -1481,18 +1823,18 @@ async function applyStickerSearch() {
   const query = stickerSearchInput.value.trim();
   if (!query) return;
 
-  const index = findStickerPickerIndexById(query);
+  const index = findStickerPickerIndexById(activeStickerSubTab, query);
   if (index == null) {
     setStickerSearchFeedback(`Sticker "${normalizeStickerIdQuery(query)}" not found`, true);
     return;
   }
 
   setStickerSearchFeedback("");
-  stickerOverlay = { ...stickerOverlay, index };
+  stickerOverlay = { ...stickerOverlay, source: activeStickerSubTab, index };
   await refreshActiveStickerImage();
   persistStickerOverlay();
   syncStickerOverlayUi();
-  stickerSearchInput.value = stickerIdFromPickerIndex(index);
+  stickerSearchInput.value = stickerIdFromPickerIndex(activeStickerSubTab, index);
   renderThumbs();
   scrollThumbGridToIndex(index);
   await renderPreview();
@@ -1577,6 +1919,48 @@ function mountVirtualThumbGrid(count, token, factory) {
   };
 }
 
+function clampCollabSelection() {
+  if (!collabSelection.id || !collabCatalog[collabSelection.id]) {
+    collabSelection = defaultCollabSelection();
+    return;
+  }
+  /** @type {CollabSelection} */
+  const next = { ...collabSelection };
+  for (const cat of COLLAB_LAYER_KEYS) {
+    const max = collabCatalog[collabSelection.id][cat].length;
+    next[cat] = Math.max(0, Math.min(next[cat], max));
+  }
+  if (next.clothes === 0 && next.hat === 0) next.id = null;
+  collabSelection = next;
+}
+
+function renderStickerSubTabs() {
+  if (!stickerSubTabsEl) return;
+  const onStickerTab = activeTab === STICKERS_TAB;
+  stickerSubTabsEl.toggleAttribute("hidden", !onStickerTab);
+  if (!onStickerTab) {
+    stickerSubTabsEl.innerHTML = "";
+    return;
+  }
+  stickerSubTabsEl.innerHTML = "";
+  for (const key of STICKER_SOURCE_KEYS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sub-tab";
+    btn.role = "tab";
+    btn.textContent = STICKER_SOURCE_LABELS[key];
+    btn.setAttribute("aria-selected", key === activeStickerSubTab ? "true" : "false");
+    btn.addEventListener("click", () => {
+      if (activeStickerSubTab === key) return;
+      activeStickerSubTab = key;
+      renderStickerSubTabs();
+      syncStickerSearchUi();
+      renderThumbs();
+    });
+    stickerSubTabsEl.appendChild(btn);
+  }
+}
+
 function renderTabs() {
   if (!tabsEl) return;
   tabsEl.innerHTML = "";
@@ -1597,6 +1981,7 @@ function renderTabs() {
     });
     tabsEl.appendChild(btn);
   }
+  renderStickerSubTabs();
 }
 
 function renderThumbs() {
@@ -1608,8 +1993,9 @@ function renderThumbs() {
 
   if (activeTab === STICKERS_TAB) {
     const count = getStickerCount();
+    const source = activeStickerSubTab;
     const factory = (i) =>
-      createStickerThumbButton(i, stickerOverlay.index === i, token);
+      createStickerThumbButton(i, isStickerSelectedInSubTab(source, i), token);
     if (count > VIRTUAL_THUMB_THRESHOLD) {
       mountVirtualThumbGrid(count, token, factory);
     } else {
@@ -1619,6 +2005,18 @@ function renderThumbs() {
   }
 
   const cat = /** @type {CategoryKey} */ (activeTab);
+  if (COLLAB_LAYER_KEYS.includes(cat)) {
+    const entries = getCategoryPickerEntries(cat);
+    const factory = (i) =>
+      createCategoryThumbButton(cat, entries[i], isCategoryEntrySelected(cat, entries[i]), token);
+    if (entries.length > VIRTUAL_THUMB_THRESHOLD) {
+      mountVirtualThumbGrid(entries.length, token, factory);
+    } else {
+      mountThumbGrid(entries.length, token, factory);
+    }
+    return;
+  }
+
   let count;
   /** @type {(i: number) => HTMLButtonElement} */
   let factory;
@@ -1650,6 +2048,7 @@ async function randomize() {
     next[key] = Math.floor(Math.random() * n);
   }
   selection = next;
+  collabSelection = defaultCollabSelection();
   stickerOverlay = defaultStickerOverlay();
   applyActiveStickerImage();
   persistStickerOverlay();
@@ -1662,6 +2061,7 @@ async function randomize() {
 async function resetSelection() {
   selection = defaultSelection();
   selection.skin = pickRandomSkinIndex();
+  collabSelection = defaultCollabSelection();
   customBackgroundColor = defaultCustomBackgroundColor();
   persistCustomBackgroundColor();
   stickerOverlay = defaultStickerOverlay();
@@ -1675,8 +2075,8 @@ async function resetSelection() {
 }
 
 function resetStickerPosition() {
-  const index = stickerOverlay.index;
-  stickerOverlay = { ...defaultStickerOverlay(), index };
+  const { index, source } = stickerOverlay;
+  stickerOverlay = { ...defaultStickerOverlay(), index, source };
   applyActiveStickerImage();
   persistStickerOverlay();
   syncStickerOverlayUi();
@@ -1889,6 +2289,7 @@ async function init() {
   clampSelection();
   applyInitialState();
   clampSelection();
+  clampCollabSelection();
   clampStickerSelection();
   persistStickerOverlay();
   syncStickerOverlayUi();

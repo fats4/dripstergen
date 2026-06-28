@@ -1,5 +1,7 @@
 /** @typedef {'background'|'clothes'|'glasses'|'hat'|'skin'} CategoryKey */
 
+/** @typedef {{ label: string; accent: string; traits: Partial<Record<CategoryKey, string[]>> }} CollabPartnerDef */
+
 /** @type {readonly CategoryKey[]} */
 export const CATEGORY_KEYS = [
   "skin",
@@ -30,8 +32,30 @@ export const CATEGORY_LABELS = {
   skin: "skin",
 };
 
-/** Picker tabs: traits + extra stickers (not full-canvas composite layers) */
+/** Picker tabs: traits + sticker overlay picker */
 export const STICKERS_TAB = "stickers";
+
+/** Layer categories that can include collab variants (shown in the same tab with card styling) */
+export const COLLAB_LAYER_KEYS = /** @type {readonly CategoryKey[]} */ (["clothes", "hat"]);
+
+/** Collab picker + preview: dev by default; opt-in on production via VITE_ENABLE_COLLAB_TRAITS=true */
+export function isCollabTraitsEnabled() {
+  const flag = (import.meta.env.VITE_ENABLE_COLLAB_TRAITS ?? "").trim().toLowerCase();
+  if (flag === "true" || flag === "1") return true;
+  if (flag === "false" || flag === "0") return false;
+  return import.meta.env.DEV;
+}
+
+/** @typedef {'skrumpeys'|'monigga'} StickerSourceKey */
+
+/** @type {readonly StickerSourceKey[]} */
+export const STICKER_SOURCE_KEYS = ["skrumpeys", "monigga"];
+
+/** @type {Record<StickerSourceKey, string>} */
+export const STICKER_SOURCE_LABELS = {
+  skrumpeys: "skrumpeys",
+  monigga: "monigga",
+};
 
 /** @typedef {CategoryKey | typeof STICKERS_TAB} PickerTabKey */
 
@@ -41,8 +65,17 @@ export const PICKER_TAB_KEYS = [...CATEGORY_KEYS, STICKERS_TAB];
 /** @type {Record<PickerTabKey, string>} */
 export const PICKER_TAB_LABELS = {
   ...CATEGORY_LABELS,
-  [STICKERS_TAB]: "skrumpeys",
+  [STICKERS_TAB]: "sticker",
 };
+
+/** @typedef {string} CollabPartnerKey */
+
+/** @typedef {{ id: string | null; clothes: number; hat: number }} CollabSelection */
+
+/** @returns {CollabSelection} */
+export function defaultCollabSelection() {
+  return { id: null, clothes: 0, hat: 0 };
+}
 
 /** @typedef {Record<CategoryKey, number>} Counts */
 /** @typedef {Record<CategoryKey, number>} Selection */
@@ -92,7 +125,7 @@ export function selectionToSeed(sel) {
   return h % 1000000;
 }
 
-/** @typedef {{ index: number; x: number; y: number; scale: number; rotation: number }} StickerOverlay */
+/** @typedef {{ source: StickerSourceKey; index: number; x: number; y: number; scale: number; rotation: number }} StickerOverlay */
 
 /**
  * @param {number} deg
@@ -128,9 +161,10 @@ export function normalizeHexColor(input) {
   return null;
 }
 
-/** index 0 = no sticker; 1+ = selection in stickers tab */
+/** index 0 = no sticker; 1+ = selection in active sticker sub-tab catalog */
 export function defaultStickerOverlay() {
   return {
+    source: /** @type {StickerSourceKey} */ ("skrumpeys"),
     index: 0,
     x: 0.5,
     y: 0.78,
@@ -167,7 +201,12 @@ export function parseStoredStickerOverlay(raw) {
   } else if (o.enabled === true) {
     index = 1;
   }
+  const source =
+    o.source === "monigga" || o.source === "skrumpeys"
+      ? /** @type {StickerSourceKey} */ (o.source)
+      : base.source;
   return {
+    source,
     index,
     x: typeof o.x === "number" && Number.isFinite(o.x) ? Math.min(1, Math.max(0, o.x)) : base.x,
     y: typeof o.y === "number" && Number.isFinite(o.y) ? Math.min(1, Math.max(0, o.y)) : base.y,
