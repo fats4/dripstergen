@@ -21,6 +21,20 @@ export function usesRemoteAssets() {
 }
 
 /**
+ * In dev with remote assets, use same-origin `/traits/*` (Vite r2-dev-proxy).
+ * Works on LAN IP / phone — no CDN CORS issues.
+ * @param {string} relPath e.g. `/traits/clothes/foo.webp`
+ * @returns {string}
+ */
+function resolveTraitAssetPath(relPath) {
+  const clean = relPath.startsWith("/") ? relPath : `/${relPath}`;
+  if (import.meta.env.DEV && ASSETS_BASE) {
+    return clean;
+  }
+  return joinAssetPath(clean);
+}
+
+/**
  * @param {string} path
  * @returns {string}
  */
@@ -46,6 +60,14 @@ export function traitsScanUrl() {
   return joinAssetPath("/traits/_scan.json");
 }
 
+/** @returns {string} */
+export function traitsCollabUrl() {
+  if (import.meta.env.DEV && ASSETS_BASE) {
+    return "/traits/_collab.json";
+  }
+  return joinAssetPath("/traits/_collab.json");
+}
+
 /**
  * @param {string} category
  * @param {string} filename
@@ -54,8 +76,8 @@ export function traitsScanUrl() {
 export function categoryAssetUrl(category, filename) {
   const name = filename.replace(/^\//, "");
   if (name.startsWith("http://") || name.startsWith("https://")) return name;
-  if (name.startsWith("/")) return joinAssetPath(name);
-  return joinAssetPath(`/traits/${category}/${name}`);
+  if (name.startsWith("/")) return resolveTraitAssetPath(name);
+  return resolveTraitAssetPath(`/traits/${category}/${name}`);
 }
 
 /**
