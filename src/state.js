@@ -46,6 +46,14 @@ export function isCollabTraitsEnabled() {
   return import.meta.env.DEV;
 }
 
+/** Monigga sticker sub-tab: dev by default; opt-in on production via VITE_ENABLE_MONIGGA_STICKERS=true */
+export function isMoniggaStickersEnabled() {
+  const flag = (import.meta.env.VITE_ENABLE_MONIGGA_STICKERS ?? "").trim().toLowerCase();
+  if (flag === "true" || flag === "1") return true;
+  if (flag === "false" || flag === "0") return false;
+  return import.meta.env.DEV;
+}
+
 /** @typedef {'skrumpeys'|'monigga'} StickerSourceKey */
 
 /** @type {readonly StickerSourceKey[]} */
@@ -56,6 +64,11 @@ export const STICKER_SOURCE_LABELS = {
   skrumpeys: "skrumpeys",
   monigga: "monigga",
 };
+
+/** @returns {readonly StickerSourceKey[]} */
+export function getStickerSourceKeys() {
+  return isMoniggaStickersEnabled() ? STICKER_SOURCE_KEYS : ["skrumpeys"];
+}
 
 /** @typedef {CategoryKey | typeof STICKERS_TAB} PickerTabKey */
 

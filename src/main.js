@@ -21,6 +21,8 @@ import {
   STICKERS_TAB,
   STICKER_SOURCE_KEYS,
   STICKER_SOURCE_LABELS,
+  getStickerSourceKeys,
+  isMoniggaStickersEnabled,
   defaultCollabSelection,
   clampStickerOverlay,
   CUSTOM_BG_COLOR_STORAGE_KEY,
@@ -695,6 +697,7 @@ function rebuildStickerIdMaps() {
   for (const source of STICKER_SOURCE_KEYS) {
     const map = stickerIdToPickerIndexBySource[source];
     map.clear();
+    if (!getStickerSourceKeys().includes(source)) continue;
     const catalog = stickerCatalogBySource[source];
     for (let i = 0; i < catalog.length; i++) {
       const stem = stickerFilenameStem(catalog[i]);
@@ -977,6 +980,7 @@ async function loadStickerCatalog() {
     skrumpeys: new Set(),
     monigga: new Set(),
   };
+  const enabledSources = getStickerSourceKeys();
 
   if (!usesRemoteAssets()) {
     for (const p of Object.keys(traitGlobModules).sort()) {
@@ -987,7 +991,7 @@ async function loadStickerCatalog() {
       const url = typeof raw === "string" ? raw : moduleToUrl(raw);
       if (!url) continue;
       if (skrumpeyMatch) bySource.skrumpeys.add(url);
-      if (moniggaMatch) bySource.monigga.add(url);
+      if (moniggaMatch && enabledSources.includes("monigga")) bySource.monigga.add(url);
     }
   }
 
@@ -996,7 +1000,7 @@ async function loadStickerCatalog() {
     if (res.ok) {
       /** @type {Partial<Record<string, unknown>>} */
       const scan = await res.json();
-      for (const source of STICKER_SOURCE_KEYS) {
+      for (const source of enabledSources) {
         const scanKey = STICKER_SOURCE_SCAN_KEY[source];
         const list = scan[scanKey];
         if (!Array.isArray(list)) continue;
@@ -1016,7 +1020,7 @@ async function loadStickerCatalog() {
     if (res.ok) {
       /** @type {Partial<Record<string, unknown>>} */
       const manifest = await res.json();
-      for (const source of STICKER_SOURCE_KEYS) {
+      for (const source of enabledSources) {
         const scanKey = STICKER_SOURCE_SCAN_KEY[source];
         const list = manifest[scanKey];
         if (!Array.isArray(list)) continue;
@@ -1032,9 +1036,21 @@ async function loadStickerCatalog() {
 
   for (const source of STICKER_SOURCE_KEYS) {
     stickerCatalogBySource[source].length = 0;
-    stickerCatalogBySource[source].push(...dedupeTraitUrls([...bySource[source]]));
+    if (enabledSources.includes(source)) {
+      stickerCatalogBySource[source].push(...dedupeTraitUrls([...bySource[source]]));
+    }
   }
   rebuildStickerIdMaps();
+}
+
+function syncStickerSourceAccess() {
+  const sources = getStickerSourceKeys();
+  if (!sources.includes(activeStickerSubTab)) {
+    activeStickerSubTab = sources[0] ?? "skrumpeys";
+  }
+  if (!isMoniggaStickersEnabled() && stickerOverlay.source === "monigga") {
+    stickerOverlay = defaultStickerOverlay();
+  }
 }
 
 function clampStickerSelection() {
@@ -1941,13 +1957,15 @@ function clampCollabSelection() {
 function renderStickerSubTabs() {
   if (!stickerSubTabsEl) return;
   const onStickerTab = activeTab === STICKERS_TAB;
-  stickerSubTabsEl.toggleAttribute("hidden", !onStickerTab);
-  if (!onStickerTab) {
+  const sources = getStickerSourceKeys();
+  const showSubTabs = onStickerTab && sources.length > 1;
+  stickerSubTabsEl.toggleAttribute("hidden", !showSubTabs);
+  if (!showSubTabs) {
     stickerSubTabsEl.innerHTML = "";
     return;
   }
   stickerSubTabsEl.innerHTML = "";
-  for (const key of STICKER_SOURCE_KEYS) {
+  for (const key of sources) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "sub-tab";
@@ -2290,6 +2308,7 @@ async function init() {
   } catch (e) {
     console.error(e);
   }
+  syncStickerSourceAccess();
   clampSelection();
   applyInitialState();
   clampSelection();

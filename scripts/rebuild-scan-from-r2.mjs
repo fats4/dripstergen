@@ -17,6 +17,7 @@ const TRAIT_CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "st
 const COLLAB_LAYER_CATEGORIES = ["clothes", "hat"];
 const IMAGE_EXT = /\.(png|webp|jpe?g|svg)$/i;
 const includeCollab = process.argv.includes("--include-collab");
+const includeMoniggaStickers = process.argv.includes("--include-monigga-stickers");
 
 /** @returns {Partial<Record<string, Set<string>>>} */
 function loadCollabBlockedFilenames() {
@@ -106,6 +107,7 @@ do {
     if (parts.length !== 2) continue;
     const [cat, file] = parts;
     if (!TRAIT_CATEGORIES.includes(cat)) continue;
+    if (cat === "monigga" && !includeMoniggaStickers) continue;
     if (!IMAGE_EXT.test(file) || file === "manifest.json") continue;
     if (collabBlocked[cat]?.has(file.toLowerCase())) continue;
     byCat[cat].add(file);
