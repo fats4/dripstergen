@@ -13,8 +13,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { filterCollabFromScan } from "./collab-scan-filter.mjs";
 
-const TRAIT_CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "stickers"];
+const TRAIT_CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
 const TRAIT_EXT = /\.(png|webp|jpe?g|svg)$/i;
 
 const outArg = process.argv.find((a) => a.startsWith("--out="));
@@ -57,7 +58,14 @@ for (const cat of TRAIT_CATEGORIES) {
   }
 }
 
-fs.mkdirSync(path.dirname(outPath), { recursive: true });
-fs.writeFileSync(outPath, `${JSON.stringify(scan)}\n`, "utf8");
+const filtered = filterCollabFromScan(scan);
 
-console.log(`build-assets-manifest: wrote ${outPath} (${total} files across ${TRAIT_CATEGORIES.length} categories)`);
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
+fs.writeFileSync(outPath, `${JSON.stringify(filtered)}\n`, "utf8");
+
+let totalFiltered = 0;
+for (const cat of TRAIT_CATEGORIES) totalFiltered += filtered[cat]?.length ?? 0;
+
+console.log(
+  `build-assets-manifest: wrote ${outPath} (${totalFiltered} files across ${TRAIT_CATEGORIES.length} categories)`,
+);

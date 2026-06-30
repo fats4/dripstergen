@@ -3,6 +3,7 @@
     "label": "MONIGGA",
     "accent": "#a78bfa",
     "traits": {
+      "skin": ["monigga.webp"],
       "clothes": ["DSO_CHAIN.webp", "Earring.webp", "Tanktop.webp"],
       "hat": ["Durag.webp"]
     }

@@ -18,6 +18,8 @@ import {
   PICKER_TAB_LABELS,
   COLLAB_LAYER_KEYS,
   isCollabTraitsEnabled,
+  isCollabCategoryEnabled,
+  isCollabSkinEnabled,
   STICKERS_TAB,
   STICKER_SOURCE_KEYS,
   STICKER_SOURCE_LABELS,
@@ -263,7 +265,7 @@ const STICKER_SOURCE_SCAN_KEY = {
 /** @type {CollabPartnerKey[]} */
 let collabPartnerKeys = [];
 
-/** @type {Record<string, { label: string; accent: string; clothes: string[]; hat: string[] }>} */
+/** @type {Record<string, { label: string; accent: string; skin: string[]; clothes: string[]; hat: string[] }>} */
 let collabCatalog = {};
 
 /** @type {Record<CategoryKey, Set<string>>} */
@@ -425,11 +427,18 @@ function urlBasename(url) {
  * @param {Record<CategoryKey, string[]>} catalog
  */
 async function applyCollabManifest(catalog) {
-  const collabEnabled = isCollabTraitsEnabled();
   collabPartnerKeys = [];
   collabCatalog = {};
   for (const key of CATEGORY_KEYS) collabFilenameSet[key].clear();
-  if (!collabEnabled) collabSelection = defaultCollabSelection();
+  if (!isCollabSkinEnabled() && !isCollabTraitsEnabled()) {
+    collabSelection = defaultCollabSelection();
+  } else if (!isCollabSkinEnabled()) {
+    collabSelection = { ...collabSelection, skin: 0 };
+    if (isCollabSelectionEmpty()) collabSelection = { ...collabSelection, id: null };
+  } else if (!isCollabTraitsEnabled()) {
+    collabSelection = { ...collabSelection, clothes: 0, hat: 0 };
+    if (isCollabSelectionEmpty()) collabSelection = { ...collabSelection, id: null };
+  }
 
   /** @type {Record<string, import('./state.js').CollabPartnerDef>} */
   let manifest = { ...bundledCollabManifest };
@@ -468,8 +477,8 @@ async function applyCollabManifest(catalog) {
     if (!def || typeof def !== "object") continue;
     const label = typeof def.label === "string" ? def.label : id;
     const accent = typeof def.accent === "string" ? def.accent : "#a78bfa";
-    /** @type {{ label: string; accent: string; clothes: string[]; hat: string[] }} */
-    const partner = { label, accent, clothes: [], hat: [] };
+    /** @type {{ label: string; accent: string; skin: string[]; clothes: string[]; hat: string[] }} */
+    const partner = { label, accent, skin: [], clothes: [], hat: [] };
 
     for (const cat of COLLAB_LAYER_KEYS) {
       const list = def.traits?.[cat];
@@ -478,11 +487,12 @@ async function applyCollabManifest(catalog) {
         if (typeof file !== "string" || !file) continue;
         const url = urlByFilename.get(file.toLowerCase()) ?? categoryAssetUrl(cat, file);
         collabFilenameSet[cat].add(file.toLowerCase());
-        if (collabEnabled) partner[cat].push(url);
+        if (isCollabCategoryEnabled(cat)) partner[cat].push(url);
       }
     }
 
-    if (!collabEnabled || partner.clothes.length + partner.hat.length === 0) continue;
+    const hasPickerTraits = COLLAB_LAYER_KEYS.some((c) => partner[c].length > 0);
+    if (!hasPickerTraits) continue;
     collabCatalog[id] = partner;
     collabPartnerKeys.push(/** @type {CollabPartnerKey} */ (id));
   }
@@ -494,13 +504,20 @@ async function applyCollabManifest(catalog) {
   }
 }
 
+function isCollabSelectionEmpty(/** @type {CollabSelection} */ sel = collabSelection) {
+  for (const cat of COLLAB_LAYER_KEYS) {
+    if (sel[cat] > 0) return false;
+  }
+  return true;
+}
+
 /**
  * @param {CategoryKey} cat
  * @returns {CategoryPickerEntry[]}
  */
 function getCategoryPickerEntries(cat) {
   /** @type {CategoryPickerEntry[]} */
-  const entries = [{ kind: "empty" }];
+  const entries = cat === "skin" ? [] : [{ kind: "empty" }];
   for (let i = 0; i < traitCatalog[cat].length; i++) {
     entries.push({ kind: "regular", index: i + 1 });
   }
@@ -554,8 +571,11 @@ async function onCategoryEntryClick(cat, entry) {
     const wasSelected = isCategoryEntrySelected(cat, entry);
     if (wasSelected) {
       collabSelection = { ...collabSelection, [cat]: 0 };
-      if (collabSelection.clothes === 0 && collabSelection.hat === 0) {
+      if (isCollabSelectionEmpty()) {
         collabSelection = { ...collabSelection, id: null };
+      }
+      if (cat === "skin") {
+        selection = { ...selection, skin: pickRandomSkinIndex() || 1 };
       }
     } else {
       collabSelection = { ...collabSelection, id: entry.collabId, [cat]: entry.index };
@@ -603,8 +623,8 @@ function collabFullUrl(collabId, cat, pickerIndex) {
  * @returns {string | null}
  */
 function resolveLayerUrl(cat, selIndex) {
-  if (isCollabTraitsEnabled() && COLLAB_LAYER_KEYS.includes(cat) && collabSelection.id) {
-    const collabIdx = collabSelection[/** @type {"clothes"|"hat"} */ (cat)];
+  if (isCollabCategoryEnabled(cat) && collabSelection.id) {
+    const collabIdx = collabSelection[cat];
     if (collabIdx > 0) {
       const url = collabFullUrl(collabSelection.id, cat, collabIdx);
       if (url) return url;
@@ -616,7 +636,7 @@ function resolveLayerUrl(cat, selIndex) {
 function clearCollabForCategory(cat) {
   if (!COLLAB_LAYER_KEYS.includes(cat)) return;
   const next = { ...collabSelection, [cat]: 0 };
-  if (next.clothes === 0 && next.hat === 0) next.id = null;
+  if (isCollabSelectionEmpty(next)) next.id = null;
   collabSelection = next;
 }
 
@@ -808,7 +828,12 @@ function clampSelection() {
   const counts = getCounts();
   for (const key of CATEGORY_KEYS) {
     if (key === "skin" && traitCatalog.skin.length > 0) {
-      selection[key] = Math.max(1, Math.min(selection[key], traitCatalog.skin.length));
+      const hasCollabSkin = isCollabSkinEnabled() && collabSelection.id && collabSelection.skin > 0;
+      if (hasCollabSkin) {
+        selection[key] = 0;
+      } else {
+        selection[key] = Math.max(1, Math.min(selection[key], traitCatalog.skin.length));
+      }
       continue;
     }
     let max = counts[key] - 1;
@@ -1950,7 +1975,7 @@ function clampCollabSelection() {
     const max = collabCatalog[collabSelection.id][cat].length;
     next[cat] = Math.max(0, Math.min(next[cat], max));
   }
-  if (next.clothes === 0 && next.hat === 0) next.id = null;
+  if (isCollabSelectionEmpty(next)) next.id = null;
   collabSelection = next;
 }
 

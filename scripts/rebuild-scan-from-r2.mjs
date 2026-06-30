@@ -12,33 +12,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { S3Client, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
+import { loadCollabBlockedFilenames } from "./collab-scan-filter.mjs";
 
 const TRAIT_CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
-const COLLAB_LAYER_CATEGORIES = ["clothes", "hat"];
 const IMAGE_EXT = /\.(png|webp|jpe?g|svg)$/i;
 const includeCollab = process.argv.includes("--include-collab");
 const includeMoniggaStickers = process.argv.includes("--include-monigga-stickers");
-
-/** @returns {Partial<Record<string, Set<string>>>} */
-function loadCollabBlockedFilenames() {
-  if (includeCollab) return {};
-  const collabPath = path.join(process.cwd(), "src", "collab-manifest.json");
-  /** @type {Partial<Record<string, Set<string>>>} */
-  const blocked = Object.fromEntries(COLLAB_LAYER_CATEGORIES.map((c) => [c, new Set()]));
-  if (!fs.existsSync(collabPath)) return blocked;
-  /** @type {Record<string, { traits?: Partial<Record<string, string[]>> }>} */
-  const manifest = JSON.parse(fs.readFileSync(collabPath, "utf8"));
-  for (const def of Object.values(manifest)) {
-    for (const cat of COLLAB_LAYER_CATEGORIES) {
-      const list = def?.traits?.[cat];
-      if (!Array.isArray(list)) continue;
-      for (const file of list) {
-        if (typeof file === "string" && file) blocked[cat].add(file.toLowerCase());
-      }
-    }
-  }
-  return blocked;
-}
 
 function loadDotEnv() {
   const envPath = path.join(process.cwd(), ".env");
@@ -87,7 +66,7 @@ const client = new S3Client({
 
 /** @type {Record<string, Set<string>>} */
 const byCat = Object.fromEntries(TRAIT_CATEGORIES.map((c) => [c, new Set()]));
-const collabBlocked = loadCollabBlockedFilenames();
+const collabBlocked = includeCollab ? {} : loadCollabBlockedFilenames();
 
 let token;
 let listed = 0;

@@ -158,6 +158,10 @@ body {
     flex-shrink: 0;
   }
 
+  .panel--picker .sub-tabs {
+    flex-shrink: 0;
+  }
+
   .panel--picker .thumb-grid {
     flex: 1 1 0;
     min-height: 0;
@@ -480,6 +484,94 @@ body {
 [data-theme="dark"] .tab[aria-selected="true"] {
   color: #0f1113;
   background: #eceff3;
+}
+
+.sub-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0 0 0.45rem;
+  margin: 0;
+  border: none;
+}
+
+.sub-tabs[hidden] {
+  display: none !important;
+}
+
+.sub-tab {
+  font: inherit;
+  text-transform: lowercase;
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0.3rem 0.65rem;
+  margin: 0;
+  border: 1px solid rgb(0 0 0 / 0.08);
+  border-radius: 999px;
+  background: transparent;
+  color: #6b7079;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+
+.sub-tab:hover {
+  color: var(--text);
+  background: rgb(0 0 0 / 0.03);
+}
+
+.sub-tab[aria-selected="true"] {
+  color: #fff;
+  background: #16171b;
+  border-color: #16171b;
+  font-weight: 600;
+}
+
+[data-theme="dark"] .sub-tab {
+  color: #a4aab4;
+  border-color: rgb(255 255 255 / 0.12);
+}
+
+[data-theme="dark"] .sub-tab:hover {
+  background: rgb(255 255 255 / 0.06);
+}
+
+[data-theme="dark"] .sub-tab[aria-selected="true"] {
+  color: #0f1113;
+  background: #eceff3;
+  border-color: #eceff3;
+}
+
+.panel--picker .sub-tabs {
+  flex-shrink: 0;
+}
+
+.thumb.thumb--collab-labeled {
+  position: relative;
+  overflow: hidden;
+}
+
+.thumb-collab-brand {
+  position: absolute;
+  left: 0.35rem;
+  right: 0.35rem;
+  bottom: 0.32rem;
+  z-index: 3;
+  padding: 0.24rem 0.4rem;
+  font-size: 0.5625rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-align: center;
+  color: #fff;
+  border-radius: 5px;
+  background: rgb(10 10 12 / 0.68);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.28);
+  pointer-events: none;
+}
+
+[data-theme="dark"] .thumb-collab-brand {
+  background: rgb(0 0 0 / 0.62);
+  color: #f4f4f5;
 }
 
 /* Only visible on the background tab (.is-visible toggled from JS) */

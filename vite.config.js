@@ -2,13 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+import { filterCollabFromScan } from "./scripts/collab-scan-filter.mjs";
 import { r2DevProxyPlugin } from "./scripts/r2-dev-proxy-plugin.mjs";
 import { traitsProxyPlugin } from "./scripts/traits-proxy-plugin.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Matches trait categories in src/state.js (no import to keep config lightweight) */
-const TRAIT_CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "stickers"];
+const TRAIT_CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
 const TRAIT_EXT = /\.(png|webp|jpe?g|svg)$/i;
 
 /**
@@ -53,7 +54,7 @@ function scanPublicTraits(projectRoot) {
       out[cat] = [];
     }
   }
-  return out;
+  return filterCollabFromScan(out, projectRoot);
 }
 
 function traitsPublicScanPlugin() {
