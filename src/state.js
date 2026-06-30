@@ -38,15 +38,15 @@ export const STICKERS_TAB = "stickers";
 /** Layer categories that can include collab variants (shown in the same tab with card styling) */
 export const COLLAB_LAYER_KEYS = /** @type {readonly CategoryKey[]} */ (["skin", "clothes", "hat"]);
 
-/** Collab picker + preview: dev by default; opt-in on production via VITE_ENABLE_COLLAB_TRAITS=true */
+/** Collab traits (clothes/hat): on by default. Set VITE_ENABLE_COLLAB_TRAITS=false to hide. */
 export function isCollabTraitsEnabled() {
   const flag = (import.meta.env.VITE_ENABLE_COLLAB_TRAITS ?? "").trim().toLowerCase();
   if (flag === "true" || flag === "1") return true;
   if (flag === "false" || flag === "0") return false;
-  return import.meta.env.DEV;
+  return true;
 }
 
-/** Skin collab tile in the skin tab — on by default (including production). Set VITE_ENABLE_COLLAB_SKIN=false to hide. */
+/** Skin collab tile in the skin tab — on by default. Set VITE_ENABLE_COLLAB_SKIN=false to hide. */
 export function isCollabSkinEnabled() {
   const flag = (import.meta.env.VITE_ENABLE_COLLAB_SKIN ?? "").trim().toLowerCase();
   if (flag === "true" || flag === "1") return true;
@@ -61,12 +61,12 @@ export function isCollabCategoryEnabled(cat) {
   return false;
 }
 
-/** Monigga sticker sub-tab: dev by default; opt-in on production via VITE_ENABLE_MONIGGA_STICKERS=true */
+/** Monigga sticker sub-tab — on by default. Set VITE_ENABLE_MONIGGA_STICKERS=false to hide. */
 export function isMoniggaStickersEnabled() {
   const flag = (import.meta.env.VITE_ENABLE_MONIGGA_STICKERS ?? "").trim().toLowerCase();
   if (flag === "true" || flag === "1") return true;
   if (flag === "false" || flag === "0") return false;
-  return import.meta.env.DEV;
+  return true;
 }
 
 /** @typedef {'skrumpeys'|'monigga'} StickerSourceKey */
