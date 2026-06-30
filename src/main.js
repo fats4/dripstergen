@@ -423,6 +423,31 @@ function urlBasename(url) {
 }
 
 /**
+ * Deep-merge collab partner defs (remote must not drop bundled trait categories).
+ * @param {Record<string, import('./state.js').CollabPartnerDef>} base
+ * @param {Record<string, import('./state.js').CollabPartnerDef>} patch
+ * @returns {Record<string, import('./state.js').CollabPartnerDef>}
+ */
+function mergeCollabManifests(base, patch) {
+  /** @type {Record<string, import('./state.js').CollabPartnerDef>} */
+  const out = { ...base };
+  for (const [id, remote] of Object.entries(patch)) {
+    if (!remote || typeof remote !== "object") continue;
+    const local = base[id];
+    if (!local) {
+      out[id] = remote;
+      continue;
+    }
+    out[id] = {
+      label: typeof remote.label === "string" ? remote.label : local.label,
+      accent: typeof remote.accent === "string" ? remote.accent : local.accent,
+      traits: { ...local.traits, ...remote.traits },
+    };
+  }
+  return out;
+}
+
+/**
  * Load collab manifest, build collab catalogs, and strip collab files from regular trait grids.
  * @param {Record<CategoryKey, string[]>} catalog
  */
@@ -452,12 +477,12 @@ async function applyCollabManifest(catalog) {
     try {
       const res = await fetch(url, { cache: usesRemoteAssets() ? "default" : "no-store" });
       if (res.ok) {
-        manifest = {
-          ...bundledCollabManifest,
-          .../** @type {Record<string, import('./state.js').CollabPartnerDef>} */ (
+        manifest = mergeCollabManifests(
+          bundledCollabManifest,
+          /** @type {Record<string, import('./state.js').CollabPartnerDef>} */ (
             await res.json()
           ),
-        };
+        );
         break;
       }
     } catch {
