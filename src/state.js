@@ -38,20 +38,28 @@ export const STICKERS_TAB = "stickers";
 /** Layer categories that can include collab variants (shown in the same tab with card styling) */
 export const COLLAB_LAYER_KEYS = /** @type {readonly CategoryKey[]} */ (["skin", "clothes", "hat"]);
 
-/** Collab traits (clothes/hat): on by default. Set VITE_ENABLE_COLLAB_TRAITS=false to hide. */
+/** MONIGGA collab off in production by default; dev on. Opt-in: VITE_ENABLE_MONIGGA_COLLAB=true */
+function isMoniggaCollabDefaultEnabled() {
+  const all = (import.meta.env.VITE_ENABLE_MONIGGA_COLLAB ?? "").trim().toLowerCase();
+  if (all === "true" || all === "1") return true;
+  if (all === "false" || all === "0") return false;
+  return import.meta.env.DEV;
+}
+
+/** Collab traits (clothes/hat). Override: VITE_ENABLE_COLLAB_TRAITS=true|false */
 export function isCollabTraitsEnabled() {
   const flag = (import.meta.env.VITE_ENABLE_COLLAB_TRAITS ?? "").trim().toLowerCase();
   if (flag === "true" || flag === "1") return true;
   if (flag === "false" || flag === "0") return false;
-  return true;
+  return isMoniggaCollabDefaultEnabled();
 }
 
-/** Skin collab tile in the skin tab — on by default. Set VITE_ENABLE_COLLAB_SKIN=false to hide. */
+/** Skin collab tile. Override: VITE_ENABLE_COLLAB_SKIN=true|false */
 export function isCollabSkinEnabled() {
   const flag = (import.meta.env.VITE_ENABLE_COLLAB_SKIN ?? "").trim().toLowerCase();
   if (flag === "true" || flag === "1") return true;
   if (flag === "false" || flag === "0") return false;
-  return true;
+  return isMoniggaCollabDefaultEnabled();
 }
 
 /** @param {CategoryKey} cat */
@@ -61,12 +69,12 @@ export function isCollabCategoryEnabled(cat) {
   return false;
 }
 
-/** Monigga sticker sub-tab — on by default. Set VITE_ENABLE_MONIGGA_STICKERS=false to hide. */
+/** Monigga sticker sub-tab. Override: VITE_ENABLE_MONIGGA_STICKERS=true|false */
 export function isMoniggaStickersEnabled() {
   const flag = (import.meta.env.VITE_ENABLE_MONIGGA_STICKERS ?? "").trim().toLowerCase();
   if (flag === "true" || flag === "1") return true;
   if (flag === "false" || flag === "0") return false;
-  return true;
+  return isMoniggaCollabDefaultEnabled();
 }
 
 /** @typedef {'skrumpeys'|'monigga'} StickerSourceKey */
