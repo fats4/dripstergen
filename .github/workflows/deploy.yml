@@ -17,7 +17,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -45,6 +45,9 @@ jobs:
           VITE_IPFS_CID: ${{ secrets.VITE_IPFS_CID }}
           VITE_IPFS_GATEWAY: ${{ secrets.VITE_IPFS_GATEWAY }}
 
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
       - name: Bake trait catalog into dist (same-origin, no R2 CORS on JSON)
         env:
           VITE_ASSETS_BASE_URL: ${{ secrets.VITE_ASSETS_BASE_URL }}
@@ -61,9 +64,24 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/deploy-pages@v4
+      - name: Deploy to GitHub Pages
         id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Retry deploy (attempt 2)
+        if: steps.deployment.outcome == 'failure'
+        id: deployment_retry
+        uses: actions/deploy-pages@v4
+
+      - name: Fail if all deploy attempts failed
+        if: steps.deployment.outcome == 'failure' && steps.deployment_retry.outcome == 'failure'
+        run: exit 1
