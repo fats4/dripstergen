@@ -1,0 +1,10 @@
+[
+  {
+    "when": {
+      "glasses": ["Noun.webp", "john_lennon.webp", "rayban.webp"]
+    },
+    "block": {
+      "accessories": ["Eyebrow_Piercing.webp"]
+    }
+  }
+]

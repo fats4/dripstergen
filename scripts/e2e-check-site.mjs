@@ -13,15 +13,20 @@ await page.waitForSelector("nav.tabs button.tab", { timeout: 60_000 });
 
 const tabs = await page.locator("nav.tabs button.tab").allTextContents();
 result.checks.tabs = tabs;
-result.checks.hasSkrumpeysTab = tabs.some((t) => /skrumpeys/i.test(t));
-result.checks.hasStickersTabLabel = tabs.some((t) => t.trim() === "stickers");
-
-// Controls hidden on skin tab
+result.checks.hasStickerTab = tabs.some((t) => /sticker/i.test(t));
 result.checks.controlsHiddenOnSkin = await page.locator("#stickerControls").isHidden();
 
-// Pick skrumpeys + first sticker
-await page.locator("nav.tabs button.tab", { hasText: /skrumpeys/i }).click();
+// Pick sticker tab + skrumpeys sub-tab + first sticker
+await page.locator("nav.tabs button.tab", { hasText: /^sticker$/i }).click();
+await page.waitForTimeout(300);
+const subTabs = await page.locator("#stickerSubTabs button.sub-tab").allTextContents();
+result.checks.stickerSubTabs = subTabs;
+result.checks.hasSkrumpeysSubTab = subTabs.some((t) => /skrumpeys/i.test(t));
+result.checks.hasMoniggaSubTab = subTabs.some((t) => /monigga/i.test(t));
+
+await page.locator("#stickerSubTabs button.sub-tab", { hasText: /skrumpeys/i }).click();
 await page.waitForTimeout(500);
+
 const thumbs = page.locator("#thumbGrid .thumb");
 if ((await thumbs.count()) > 1) await thumbs.nth(1).click();
 await page.waitForTimeout(800);
@@ -55,8 +60,9 @@ const download = await dl;
 result.checks.downloadOk = Boolean(download);
 
 result.ok =
-  result.checks.hasSkrumpeysTab &&
-  !result.checks.hasStickersTabLabel &&
+  result.checks.hasStickerTab &&
+  result.checks.hasSkrumpeysSubTab &&
+  result.checks.hasMoniggaSubTab &&
   result.checks.controlsHiddenOnSkin &&
   result.checks.controlsVisibleOnSkrumpeysWithSticker &&
   result.checks.controlsHiddenAfterLeaveSkrumpeys &&

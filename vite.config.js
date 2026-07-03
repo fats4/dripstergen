@@ -3,13 +3,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { filterCollabFromScan } from "./scripts/collab-scan-filter.mjs";
-import { r2DevProxyPlugin } from "./scripts/r2-dev-proxy-plugin.mjs";
+import {
+  loadDotEnv,
+  r2DevProxyPlugin,
+  shouldUseR2TraitsInDev,
+} from "./scripts/r2-dev-proxy-plugin.mjs";
 import { traitsProxyPlugin } from "./scripts/traits-proxy-plugin.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+loadDotEnv(__dirname);
+const useR2TraitsInDev = shouldUseR2TraitsInDev(process.env);
 
 /** Matches trait categories in src/state.js (no import to keep config lightweight) */
-const TRAIT_CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
+const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
 const TRAIT_EXT = /\.(png|webp|jpe?g|svg)$/i;
 
 /**
@@ -57,10 +63,12 @@ function scanPublicTraits(projectRoot) {
   return filterCollabFromScan(out, projectRoot);
 }
 
-function traitsPublicScanPlugin() {
+function traitsPublicScanPlugin(/** @type {{ devScan?: boolean; buildScan?: boolean }} */ options = {}) {
+  const { devScan = true, buildScan = true } = options;
   return {
     name: "traits-public-scan",
     configureServer(server) {
+      if (!devScan) return;
       server.middlewares.use((req, res, next) => {
         const pathOnly = req.url?.split("?")[0];
         if (pathOnly === "/traits/_scan.json") {
@@ -73,6 +81,7 @@ function traitsPublicScanPlugin() {
       });
     },
     writeBundle(outputOptions) {
+      if (!buildScan) return;
       const outDir = outputOptions.dir ?? path.join(__dirname, "dist");
       const traitsDir = path.join(outDir, "traits");
       try {
@@ -101,7 +110,14 @@ export default defineConfig({
   base: process.env.GH_PAGES === "true" ? GH_PAGES_BASE : "/",
   root: ".",
   publicDir: "public",
-  plugins: [r2DevProxyPlugin(__dirname), traitsProxyPlugin(__dirname), traitsPublicScanPlugin()],
+  env: {
+    VITE_R2_DEV_TRAITS: useR2TraitsInDev ? "true" : "",
+  },
+  plugins: [
+    r2DevProxyPlugin(__dirname),
+    traitsProxyPlugin(__dirname),
+    traitsPublicScanPlugin({ devScan: !useR2TraitsInDev, buildScan: true }),
+  ],
   server: {
     /** Access via ngrok / tunnel (Host header changes per URL) */
     host: true,

@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 
-const CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "stickers"];
+const CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
 const IMAGE_EXT = /\.(png|webp|jpe?g|svg)$/i;
 
 const dryRun = process.argv.includes("--dry-run");

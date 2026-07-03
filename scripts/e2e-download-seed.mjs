@@ -31,7 +31,8 @@ await page.fill("#backgroundColorHex", "#363636");
 await page.locator("#backgroundColorHex").press("Enter");
 await page.waitForTimeout(300);
 
-await page.locator("nav.tabs button.tab", { hasText: "stickers" }).click();
+await page.locator("nav.tabs button.tab", { hasText: /^sticker$/i }).click();
+await page.locator("#stickerSubTabs button.sub-tab", { hasText: /skrumpeys/i }).click();
 await page.locator("#thumbGrid .thumb").nth(5).click();
 await page.waitForTimeout(300);
 

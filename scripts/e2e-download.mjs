@@ -30,9 +30,13 @@ await page.waitForFunction(() => {
 }, { timeout: 60_000 });
 
 // Pick traits on each tab (index 1 = first real trait)
-for (const tab of ["skin", "clothes", "hat", "glasses", "background", "stickers"]) {
+for (const tab of ["skin", "clothes", "hat", "glasses", "background", "sticker"]) {
   await page.locator("nav.tabs button.tab", { hasText: tab }).click();
   await page.waitForTimeout(400);
+  if (tab === "sticker") {
+    await page.locator("#stickerSubTabs button.sub-tab", { hasText: /skrumpeys/i }).click();
+    await page.waitForTimeout(200);
+  }
   if (tab === "background") {
     await page.locator("#thumbGrid .thumb--custom-bg").click();
     await page.fill("#backgroundColorHex", "#363636");

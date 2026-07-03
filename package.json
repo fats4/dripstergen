@@ -18,6 +18,7 @@
     "upload:r2": "node scripts/upload-r2.mjs",
     "upload:r2:full": "node scripts/upload-r2.mjs --with-scan",
     "upload:update": "node scripts/prepare-r2-upload.mjs --from=update && node scripts/upload-r2.mjs --rebuild-scan && node scripts/verify-catalog.mjs",
+    "replace:r2": "node scripts/replace-r2-asset.mjs",
     "rebuild:scan": "node scripts/rebuild-scan-from-r2.mjs",
     "rebuild:scan:upload": "node scripts/rebuild-scan-from-r2.mjs --upload",
     "verify:catalog": "node scripts/verify-catalog.mjs",

@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const COLLAB_SCAN_CATEGORIES = ["skin", "clothes", "hat"];
+export const COLLAB_SCAN_CATEGORIES = ["skin", "frame", "clothes", "hat", "accessories"];
 
 /** @returns {Partial<Record<string, Set<string>>>} */
 export function loadCollabBlockedFilenames(projectRoot = process.cwd()) {
@@ -32,14 +32,25 @@ export function loadCollabBlockedFilenames(projectRoot = process.cwd()) {
  * @param {string} [projectRoot]
  * @returns {Record<string, string[]>}
  */
-export function filterCollabFromScan(scan, projectRoot = process.cwd()) {
+/** @returns {Set<string>} All collab trait filenames (any category). */
+export function allCollabBlockedFilenames(projectRoot = process.cwd()) {
   const blocked = loadCollabBlockedFilenames(projectRoot);
+  /** @type {Set<string>} */
+  const all = new Set();
+  for (const set of Object.values(blocked)) {
+    for (const file of set ?? []) all.add(file);
+  }
+  return all;
+}
+
+export function filterCollabFromScan(scan, projectRoot = process.cwd()) {
+  const allBlocked = allCollabBlockedFilenames(projectRoot);
+  if (!allBlocked.size) return { ...scan };
   /** @type {Record<string, string[]>} */
   const out = { ...scan };
-  for (const cat of COLLAB_SCAN_CATEGORIES) {
-    const set = blocked[cat];
-    if (!set?.size || !Array.isArray(out[cat])) continue;
-    out[cat] = out[cat].filter((f) => !set.has(f.toLowerCase()));
+  for (const [cat, list] of Object.entries(out)) {
+    if (!Array.isArray(list)) continue;
+    out[cat] = list.filter((f) => !allBlocked.has(String(f).toLowerCase()));
   }
   return out;
 }

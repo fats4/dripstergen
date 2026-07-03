@@ -12,9 +12,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { S3Client, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
-import { loadCollabBlockedFilenames } from "./collab-scan-filter.mjs";
+import { allCollabBlockedFilenames, loadCollabBlockedFilenames } from "./collab-scan-filter.mjs";
 
-const TRAIT_CATEGORIES = ["skin", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
+const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
 const IMAGE_EXT = /\.(png|webp|jpe?g|svg)$/i;
 const includeCollab = process.argv.includes("--include-collab");
 const includeMoniggaStickers = process.argv.includes("--include-monigga-stickers");
@@ -66,7 +66,8 @@ const client = new S3Client({
 
 /** @type {Record<string, Set<string>>} */
 const byCat = Object.fromEntries(TRAIT_CATEGORIES.map((c) => [c, new Set()]));
-const collabBlocked = includeCollab ? {} : loadCollabBlockedFilenames();
+const collabBlockedByCat = includeCollab ? {} : loadCollabBlockedFilenames();
+const collabBlockedAll = includeCollab ? new Set() : allCollabBlockedFilenames();
 
 let token;
 let listed = 0;
@@ -88,7 +89,9 @@ do {
     if (!TRAIT_CATEGORIES.includes(cat)) continue;
     if (cat === "monigga" && !includeMoniggaStickers) continue;
     if (!IMAGE_EXT.test(file) || file === "manifest.json") continue;
-    if (collabBlocked[cat]?.has(file.toLowerCase())) continue;
+    const fileLower = file.toLowerCase();
+    if (collabBlockedAll.has(fileLower)) continue;
+    if (collabBlockedByCat[cat]?.has(fileLower)) continue;
     byCat[cat].add(file);
   }
   token = res.IsTruncated ? res.NextContinuationToken : undefined;

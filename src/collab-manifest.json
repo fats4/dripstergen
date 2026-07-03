@@ -3,9 +3,34 @@
     "label": "MONIGGA",
     "accent": "#a78bfa",
     "traits": {
-      "skin": ["monigga.webp"],
-      "clothes": ["DSO_CHAIN.webp", "Earring.webp", "Tanktop.webp"],
-      "hat": ["Durag.webp"]
-    }
+      "skin": ["monigga.webp", "Base.webp"],
+      "frame": ["mon_frame.webp"],
+      "clothes": ["dso_1.webp", "dso_2.webp", "dso_3.webp", "dso_4.webp", "Tanktop.webp"],
+      "hat": ["durag_black.webp", "durag_purpl.webp", "durag_red.webp"],
+      "accessories": [
+        "Eyebrow_Piercing.webp",
+        "Mouth_Piercing.webp",
+        "Nose_Piercing.webp",
+        "Piercing.webp",
+        "Earring.webp"
+      ]
+    },
+    "traitLocks": [
+      {
+        "when": { "skin": "Base.webp" },
+        "block": { "accessories": ["Mouth_Piercing.webp", "Nose_Piercing.webp"] }
+      },
+      {
+        "when": { "skin": "monigga.webp" },
+        "block": {
+          "glasses": ["Weaboo.webp"],
+          "accessories": [
+            "Eyebrow_Piercing.webp",
+            "Mouth_Piercing.webp",
+            "Nose_Piercing.webp"
+          ]
+        }
+      }
+    ]
   }
 }

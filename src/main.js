@@ -1,5 +1,6 @@
 import "./style.css";
 import bundledCollabManifest from "./collab-manifest.json";
+import bundledTraitLocks from "./trait-locks.json";
 import {
   categoryAssetUrl,
   categoryThumbUrl,
@@ -50,6 +51,10 @@ import {
 const PREVIEW = 1024;
 /** Logical thumbnail size (px); larger canvas buffer for Retina + wide grid cells */
 const THUMB = 96;
+/** Tab thumb only — room for `.thumb-collab-brand` (preview composite unchanged) */
+const COLLAB_THUMB_BRAND_INSET = THUMB * 0.19;
+
+/** @typedef {'default' | 'collab-clothes'} ThumbLayout */
 const IMAGE_CACHE_MAX = 300;
 /** Painted thumb bitmaps — instant restore when virtual scroll remounts cells */
 const THUMB_PAINT_CACHE_MAX = 600;
@@ -238,6 +243,8 @@ app.innerHTML = `
 /** @type {Record<CategoryKey, string[]>} */
 const traitCatalog = {
   background: [],
+  frame: [],
+  accessories: [],
   clothes: [],
   glasses: [],
   hat: [],
@@ -265,12 +272,19 @@ const STICKER_SOURCE_SCAN_KEY = {
 /** @type {CollabPartnerKey[]} */
 let collabPartnerKeys = [];
 
-/** @type {Record<string, { label: string; accent: string; skin: string[]; clothes: string[]; hat: string[] }>} */
+/** @type {Record<string, import('./state.js').CollabTraitLockRule[]>} */
+let collabTraitLocks = {};
+/** @type {import('./state.js').CollabTraitLockRule[]} */
+const globalTraitLocks = Array.isArray(bundledTraitLocks) ? bundledTraitLocks : [];
+
+/** @type {Record<string, { label: string; accent: string; skin: string[]; frame: string[]; clothes: string[]; hat: string[]; accessories: string[] }>} */
 let collabCatalog = {};
 
 /** @type {Record<CategoryKey, Set<string>>} */
 const collabFilenameSet = {
   background: new Set(),
+  frame: new Set(),
+  accessories: new Set(),
   clothes: new Set(),
   glasses: new Set(),
   hat: new Set(),
@@ -352,6 +366,8 @@ async function loadTraitCatalog() {
   /** @type {Record<CategoryKey, Set<string>>} */
   const byCat = {
     background: new Set(),
+    frame: new Set(),
+    accessories: new Set(),
     clothes: new Set(),
     glasses: new Set(),
     hat: new Set(),
@@ -442,6 +458,7 @@ function mergeCollabManifests(base, patch) {
       label: typeof remote.label === "string" ? remote.label : local.label,
       accent: typeof remote.accent === "string" ? remote.accent : local.accent,
       traits: { ...local.traits, ...remote.traits },
+      traitLocks: Array.isArray(remote.traitLocks) ? remote.traitLocks : local.traitLocks,
     };
   }
   return out;
@@ -454,6 +471,7 @@ function mergeCollabManifests(base, patch) {
 async function applyCollabManifest(catalog) {
   collabPartnerKeys = [];
   collabCatalog = {};
+  collabTraitLocks = {};
   for (const key of CATEGORY_KEYS) collabFilenameSet[key].clear();
   if (!isCollabSkinEnabled() && !isCollabTraitsEnabled()) {
     collabSelection = defaultCollabSelection();
@@ -461,8 +479,13 @@ async function applyCollabManifest(catalog) {
     collabSelection = { ...collabSelection, skin: 0 };
     if (isCollabSelectionEmpty()) collabSelection = { ...collabSelection, id: null };
   } else if (!isCollabTraitsEnabled()) {
-    collabSelection = { ...collabSelection, clothes: 0, hat: 0 };
-    if (isCollabSelectionEmpty()) collabSelection = { ...collabSelection, id: null };
+    const next = { ...collabSelection };
+    for (const cat of COLLAB_LAYER_KEYS) {
+      if (cat === "skin") continue;
+      next[cat] = 0;
+    }
+    if (isCollabSelectionEmpty(next)) next.id = null;
+    collabSelection = next;
   }
 
   /** @type {Record<string, import('./state.js').CollabPartnerDef>} */
@@ -490,27 +513,20 @@ async function applyCollabManifest(catalog) {
     }
   }
 
-  /** @type {Map<string, string>} filenameLower → url */
-  const urlByFilename = new Map();
-  for (const cat of COLLAB_LAYER_KEYS) {
-    for (const url of catalog[cat]) {
-      urlByFilename.set(urlBasename(url).toLowerCase(), url);
-    }
-  }
-
   for (const [id, def] of Object.entries(manifest)) {
     if (!def || typeof def !== "object") continue;
     const label = typeof def.label === "string" ? def.label : id;
     const accent = typeof def.accent === "string" ? def.accent : "#a78bfa";
-    /** @type {{ label: string; accent: string; skin: string[]; clothes: string[]; hat: string[] }} */
-    const partner = { label, accent, skin: [], clothes: [], hat: [] };
+    /** @type {{ label: string; accent: string; skin: string[]; frame: string[]; clothes: string[]; hat: string[]; accessories: string[] }} */
+    const partner = { label, accent, skin: [], frame: [], clothes: [], hat: [], accessories: [] };
 
     for (const cat of COLLAB_LAYER_KEYS) {
       const list = def.traits?.[cat];
       if (!Array.isArray(list)) continue;
       for (const file of list) {
         if (typeof file !== "string" || !file) continue;
-        const url = urlByFilename.get(file.toLowerCase()) ?? categoryAssetUrl(cat, file);
+        // Always use the collab manifest category path (not a duplicate in clothes/, etc.).
+        const url = categoryAssetUrl(cat, file);
         collabFilenameSet[cat].add(file.toLowerCase());
         if (isCollabCategoryEnabled(cat)) partner[cat].push(url);
       }
@@ -519,13 +535,21 @@ async function applyCollabManifest(catalog) {
     const hasPickerTraits = COLLAB_LAYER_KEYS.some((c) => partner[c].length > 0);
     if (!hasPickerTraits) continue;
     collabCatalog[id] = partner;
+    collabTraitLocks[id] = Array.isArray(def.traitLocks) ? def.traitLocks : [];
     collabPartnerKeys.push(/** @type {CollabPartnerKey} */ (id));
   }
 
+  /** @type {Set<string>} */
+  const allCollabFilenames = new Set();
   for (const cat of COLLAB_LAYER_KEYS) {
-    const blocked = collabFilenameSet[cat];
-    if (blocked.size === 0) continue;
-    catalog[cat] = catalog[cat].filter((url) => !blocked.has(urlBasename(url).toLowerCase()));
+    for (const file of collabFilenameSet[cat]) allCollabFilenames.add(file);
+  }
+  if (allCollabFilenames.size > 0) {
+    for (const key of CATEGORY_KEYS) {
+      catalog[key] = catalog[key].filter(
+        (url) => !allCollabFilenames.has(urlBasename(url).toLowerCase()),
+      );
+    }
   }
 }
 
@@ -534,6 +558,164 @@ function isCollabSelectionEmpty(/** @type {CollabSelection} */ sel = collabSelec
     if (sel[cat] > 0) return false;
   }
   return true;
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @returns {string | null}
+ */
+function getActiveCollabTraitFilename(cat) {
+  if (!collabSelection.id || collabSelection[cat] <= 0) return null;
+  const url = collabFullUrl(collabSelection.id, cat, collabSelection[cat]);
+  return url ? urlBasename(url) : null;
+}
+
+/**
+ * Active filename for a category (collab layer wins over regular catalog when both exist).
+ * @param {CategoryKey} cat
+ * @returns {string | null}
+ */
+function getActiveTraitFilename(cat) {
+  if (COLLAB_LAYER_KEYS.includes(cat) && collabSelection.id && collabSelection[cat] > 0) {
+    const collabFile = getActiveCollabTraitFilename(cat);
+    if (collabFile) return collabFile;
+  }
+  if (selection[cat] <= 0) return null;
+  const url = traitFullUrl(cat, selection[cat]);
+  return url ? urlBasename(url) : null;
+}
+
+/**
+ * @param {string | string[] | undefined} whenVal
+ * @param {string | null} activeFile
+ * @returns {boolean}
+ */
+function whenValueMatches(whenVal, activeFile) {
+  if (!activeFile) return false;
+  const allowed = Array.isArray(whenVal) ? whenVal : [whenVal];
+  return allowed.some(
+    (f) => typeof f === "string" && f && f.toLowerCase() === activeFile.toLowerCase(),
+  );
+}
+
+/**
+ * @param {import('./state.js').TraitLockWhen} when
+ * @returns {boolean}
+ */
+function isTraitLockWhenActive(when) {
+  for (const [whenCat, whenVal] of Object.entries(when)) {
+    if (!whenVal || (typeof whenVal !== "string" && !Array.isArray(whenVal))) return false;
+    const activeFile = getActiveTraitFilename(/** @type {CategoryKey} */ (whenCat));
+    if (!whenValueMatches(whenVal, activeFile)) return false;
+  }
+  return true;
+}
+
+/**
+ * @param {import('./state.js').CollabTraitLockRule[]} locks
+ * @param {CategoryKey} cat
+ * @param {string} entryFileLower
+ * @returns {boolean}
+ */
+function isEntryBlockedByLockRules(locks, cat, entryFileLower) {
+  for (const rule of locks) {
+    if (!isTraitLockWhenActive(rule.when ?? {})) continue;
+    const blocked = rule.block?.[cat];
+    if (!Array.isArray(blocked)) continue;
+    if (blocked.some((f) => typeof f === "string" && f.toLowerCase() === entryFileLower)) return true;
+  }
+  return false;
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @param {CategoryPickerEntry} entry
+ * @returns {string | null}
+ */
+function getCategoryEntryFilename(cat, entry) {
+  if (entry.kind === "empty") return null;
+  if (entry.kind === "collab") return urlBasename(entry.url);
+  const url = traitFullUrl(cat, entry.index);
+  return url ? urlBasename(url) : null;
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @param {CategoryPickerEntry} entry
+ * @returns {boolean}
+ */
+function isCategoryEntryLocked(cat, entry) {
+  if (entry.kind === "empty") return false;
+  const entryFile = getCategoryEntryFilename(cat, entry)?.toLowerCase();
+  if (!entryFile) return false;
+
+  if (isEntryBlockedByLockRules(globalTraitLocks, cat, entryFile)) return true;
+
+  const partnerId = entry.kind === "collab" ? entry.collabId : collabSelection.id;
+  const locks = partnerId ? collabTraitLocks[partnerId] : null;
+  if (!locks?.length) return false;
+  return isEntryBlockedByLockRules(locks, cat, entryFile);
+}
+
+/** @returns {boolean} */
+function enforceTraitLocks() {
+  let changed = false;
+  /** @type {CollabSelection} */
+  const nextCollab = { ...collabSelection };
+  /** @type {Selection} */
+  let nextSelection = { ...selection };
+
+  for (const cat of COLLAB_LAYER_KEYS) {
+    if (nextCollab[cat] <= 0) continue;
+    const url = collabFullUrl(collabSelection.id, cat, nextCollab[cat]);
+    if (!url) continue;
+    /** @type {CollabThumbEntry} */
+    const entry = {
+      kind: "collab",
+      collabId: collabSelection.id,
+      category: cat,
+      index: nextCollab[cat],
+      url,
+      label: urlBasename(url).replace(/\.[^.]+$/i, ""),
+    };
+    if (!isCategoryEntryLocked(cat, entry)) continue;
+    nextCollab[cat] = 0;
+    changed = true;
+  }
+
+  for (const cat of CATEGORY_KEYS) {
+    if (nextSelection[cat] <= 0) continue;
+    /** @type {CategoryPickerEntry} */
+    const entry = { kind: "regular", index: nextSelection[cat] };
+    if (!isCategoryEntryLocked(cat, entry)) continue;
+    nextSelection[cat] = 0;
+    changed = true;
+  }
+
+  if (!changed) return false;
+  if (isCollabSelectionEmpty(nextCollab)) nextCollab.id = null;
+  collabSelection = nextCollab;
+  selection = nextSelection;
+  for (const cat of COLLAB_LAYER_KEYS) {
+    if (collabSelection[cat] === 0) selection = { ...selection, [cat]: 0 };
+  }
+  return true;
+}
+
+/**
+ * @param {HTMLButtonElement} btn
+ * @param {boolean} locked
+ */
+function applyThumbLockUi(btn, locked) {
+  if (!locked) return;
+  btn.classList.add("thumb--locked");
+  btn.disabled = true;
+  btn.setAttribute("aria-disabled", "true");
+  const overlay = document.createElement("span");
+  overlay.className = "thumb-lock-overlay";
+  overlay.textContent = "locked";
+  overlay.setAttribute("aria-hidden", "true");
+  btn.appendChild(overlay);
 }
 
 /**
@@ -565,15 +747,24 @@ function getCategoryPickerEntries(cat) {
 
 /**
  * @param {CategoryKey} cat
+ * @returns {number}
+ */
+function collabPickerIndex(cat) {
+  if (!COLLAB_LAYER_KEYS.includes(cat)) return 0;
+  return collabSelection[cat];
+}
+
+/**
+ * @param {CategoryKey} cat
  * @param {CategoryPickerEntry} entry
  * @returns {boolean}
  */
 function isCategoryEntrySelected(cat, entry) {
   if (entry.kind === "empty") {
-    return selection[cat] === 0 && collabSelection[cat] === 0;
+    return selection[cat] === 0 && collabPickerIndex(cat) === 0;
   }
   if (entry.kind === "regular") {
-    return selection[cat] === entry.index && collabSelection[cat] === 0;
+    return selection[cat] === entry.index && collabPickerIndex(cat) === 0;
   }
   return collabSelection.id === entry.collabId && collabSelection[cat] === entry.index;
 }
@@ -583,6 +774,8 @@ function isCategoryEntrySelected(cat, entry) {
  * @param {CategoryPickerEntry} entry
  */
 async function onCategoryEntryClick(cat, entry) {
+  if (entry.kind !== "empty" && isCategoryEntryLocked(cat, entry)) return;
+
   /** @type {string | null} */
   let prefetchUrl = null;
   if (entry.kind === "empty") {
@@ -608,6 +801,7 @@ async function onCategoryEntryClick(cat, entry) {
       prefetchUrl = entry.url;
     }
   }
+  enforceTraitLocks();
   syncSeed();
   renderThumbs();
   if (prefetchUrl) await getCachedImage(imageCache, prefetchUrl).catch(() => null);
@@ -622,13 +816,17 @@ async function onCategoryEntryClick(cat, entry) {
  * @returns {HTMLButtonElement}
  */
 function createCategoryThumbButton(cat, entry, selected, token) {
+  /** @type {HTMLButtonElement} */
+  let btn;
   if (entry.kind === "empty") {
-    return createTraitThumbButton(cat, 0, selected, token);
+    btn = createTraitThumbButton(cat, 0, selected, token);
+  } else if (entry.kind === "regular") {
+    btn = createTraitThumbButton(cat, entry.index, selected, token);
+  } else {
+    btn = createCollabThumbButton(entry, selected, token);
   }
-  if (entry.kind === "regular") {
-    return createTraitThumbButton(cat, entry.index, selected, token);
-  }
-  return createCollabThumbButton(entry, selected, token);
+  applyThumbLockUi(btn, isCategoryEntryLocked(cat, entry));
+  return btn;
 }
 
 /**
@@ -1082,6 +1280,24 @@ async function loadStickerCatalog() {
     }
   } catch {
     /* manifest optional */
+  }
+
+  if (import.meta.env.DEV && isMoniggaStickersEnabled()) {
+    try {
+      const res = await fetch("/traits/_dev-monigga-stickers.json", { cache: "no-store" });
+      if (res.ok) {
+        const list = await res.json();
+        if (Array.isArray(list)) {
+          for (const name of list) {
+            if (typeof name === "string" && name) {
+              bySource.monigga.add(stickerSourceAssetUrl("monigga", name));
+            }
+          }
+        }
+      }
+    } catch {
+      /* dev-only monigga sticker list */
+    }
   }
 
   for (const source of STICKER_SOURCE_KEYS) {
@@ -1574,12 +1790,49 @@ async function getImageAlphaBounds(img, cacheKey) {
 }
 
 /**
+ * @param {string} url
+ * @param {ThumbLayout} [layout]
+ */
+function thumbPaintCacheKey(url, layout = "default") {
+  return layout === "default" ? url : `${url}#${layout}`;
+}
+
+/**
+ * Bottom-align collab clothes in the tab thumb so every item shares one baseline above the brand bar.
+ * @param {HTMLCanvasElement} c
+ * @param {HTMLImageElement} img
+ * @param {ThumbCrop} crop
+ */
+function drawCollabClothesOnThumb(c, img, crop) {
+  const tctx = c.getContext("2d");
+  if (!tctx || !img.naturalWidth) return;
+
+  const drawH = THUMB - COLLAB_THUMB_BRAND_INSET;
+  const pad = drawH * 0.12;
+  const innerW = THUMB - pad * 2;
+  const innerH = drawH - pad * 2;
+  const scale = Math.min(innerW / crop.sw, innerH / crop.sh);
+  const w = crop.sw * scale;
+  const h = crop.sh * scale;
+  const x = (THUMB - w) / 2;
+  const y = drawH - pad - h;
+
+  tctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, x, y, w, h);
+}
+
+/**
  * @param {HTMLCanvasElement} c
  * @param {HTMLImageElement} img
  * @param {boolean} [contain]
  * @param {ThumbCrop | null} [crop]
+ * @param {ThumbLayout} [layout]
  */
-function drawImageOnThumb(c, img, contain = false, crop = null) {
+function drawImageOnThumb(c, img, contain = false, crop = null, layout = "default") {
+  if (layout === "collab-clothes" && crop) {
+    drawCollabClothesOnThumb(c, img, crop);
+    return;
+  }
+
   const tctx = c.getContext("2d");
   if (!tctx || !img.naturalWidth) return;
 
@@ -1643,8 +1896,9 @@ async function loadThumbImage(thumbUrl, fallbackUrl) {
  * @param {HTMLImageElement} img
  * @param {boolean} [contain]
  * @param {ThumbCrop | null} [crop]
+ * @param {ThumbLayout} [layout]
  */
-function paintThumbCanvas(canvas, img, contain = false, crop = null) {
+function paintThumbCanvas(canvas, img, contain = false, crop = null, layout = "default") {
   const tctx = canvas.getContext("2d");
   if (!tctx || !img.naturalWidth) return;
   const px = thumbCanvasPixelSize();
@@ -1652,19 +1906,20 @@ function paintThumbCanvas(canvas, img, contain = false, crop = null) {
   tctx.clearRect(0, 0, px, px);
   const k = px / THUMB;
   tctx.setTransform(k, 0, 0, k, 0, 0);
-  drawImageOnThumb(canvas, img, contain, crop);
+  drawImageOnThumb(canvas, img, contain, crop, layout);
 }
 
 /**
  * @param {HTMLCanvasElement} canvas
- * @param {{ thumbUrl: string | null; fullUrl: string | null; contain?: boolean; cropToContent?: boolean }} opts
+ * @param {{ thumbUrl: string | null; fullUrl: string | null; contain?: boolean; cropToContent?: boolean; layout?: ThumbLayout }} opts
  * @returns {boolean}
  */
 function trySyncHydrateThumb(canvas, opts) {
-  const { thumbUrl, fullUrl, contain = false, cropToContent = false } = opts;
+  const { thumbUrl, fullUrl, contain = false, cropToContent = false, layout = "default" } = opts;
   const cacheUrl = fullUrl || thumbUrl;
   if (!cacheUrl) return false;
-  if (restorePaintedThumb(canvas, cacheUrl)) return true;
+  const paintKey = thumbPaintCacheKey(cacheUrl, layout);
+  if (restorePaintedThumb(canvas, paintKey)) return true;
 
   const cached =
     (thumbUrl ? imageCache.get(thumbUrl) : undefined) ??
@@ -1677,15 +1932,15 @@ function trySyncHydrateThumb(canvas, opts) {
     crop = thumbBoundsCache.get(cacheUrl) ?? null;
   }
 
-  paintThumbCanvas(canvas, cached, contain, crop);
-  setThumbPaintCache(cacheUrl, canvas);
+  paintThumbCanvas(canvas, cached, contain, crop, layout);
+  setThumbPaintCache(paintKey, canvas);
   return true;
 }
 
 /**
  * @param {HTMLButtonElement} btn
  * @param {number} token
- * @param {() => { thumbUrl: string | null; fullUrl: string | null; contain?: boolean; cropToContent?: boolean }} getUrls
+ * @param {() => { thumbUrl: string | null; fullUrl: string | null; contain?: boolean; cropToContent?: boolean; layout?: ThumbLayout }} getUrls
  */
 async function hydrateThumbButton(btn, token, getUrls) {
   if (token !== thumbRenderToken) return;
@@ -1693,8 +1948,9 @@ async function hydrateThumbButton(btn, token, getUrls) {
   if (!(canvas instanceof HTMLCanvasElement)) return;
 
   const opts = getUrls();
-  const { thumbUrl, fullUrl, contain = false, cropToContent = false } = opts;
+  const { thumbUrl, fullUrl, contain = false, cropToContent = false, layout = "default" } = opts;
   const cacheUrl = fullUrl || thumbUrl;
+  const paintKey = cacheUrl ? thumbPaintCacheKey(cacheUrl, layout) : null;
 
   const paint = async (/** @type {HTMLImageElement} */ img) => {
     let crop = null;
@@ -1702,8 +1958,8 @@ async function hydrateThumbButton(btn, token, getUrls) {
       crop = await getImageAlphaBounds(img, cacheUrl);
     }
     if (token !== thumbRenderToken || !btn.isConnected) return;
-    paintThumbCanvas(canvas, img, contain, crop);
-    if (cacheUrl) setThumbPaintCache(cacheUrl, canvas);
+    paintThumbCanvas(canvas, img, contain, crop, layout);
+    if (paintKey) setThumbPaintCache(paintKey, canvas);
     btn.classList.remove("thumb--loading");
   };
 
@@ -1748,6 +2004,10 @@ function createTraitThumbButton(cat, index, selected, token) {
   }
   btn.setAttribute("aria-selected", selected ? "true" : "false");
   btn.dataset.index = String(index);
+  if (index === 0 && (cat === "frame" || cat === "accessories")) {
+    btn.title = "None";
+    btn.setAttribute("aria-label", "None");
+  }
 
   const canvas = createThumbCanvas();
   if (index === 0) {
@@ -1787,10 +2047,11 @@ function createTraitThumbButton(cat, index, selected, token) {
  * @param {number} index
  */
 async function onTraitThumbClick(cat, index) {
-  if (index > 0 && COLLAB_LAYER_KEYS.includes(cat)) {
+  if (COLLAB_LAYER_KEYS.includes(cat)) {
     clearCollabForCategory(cat);
   }
   selection = { ...selection, [cat]: index };
+  enforceTraitLocks();
   syncSeed();
   renderThumbs();
   if (cat === "background" && isCustomBackgroundIndex(index)) {
@@ -1813,7 +2074,7 @@ function createCollabThumbButton(entry, selected, token) {
   const meta = collabCatalog[entry.collabId];
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "thumb thumb--collab-labeled";
+  btn.className = "thumb thumb--collab-labeled thumb--monigga";
   btn.setAttribute("aria-selected", selected ? "true" : "false");
   btn.title = `${meta?.label ?? entry.collabId} · ${entry.label}`;
 
@@ -1825,7 +2086,10 @@ function createCollabThumbButton(entry, selected, token) {
   brand.textContent = meta?.label ?? entry.collabId;
   btn.appendChild(brand);
 
-  const opts = { thumbUrl: null, fullUrl: entry.url, cropToContent: true };
+  const thumbLayout = /** @type {ThumbLayout} */ (
+    entry.category === "clothes" ? "collab-clothes" : "default"
+  );
+  const opts = { thumbUrl: null, fullUrl: entry.url, cropToContent: true, layout: thumbLayout };
   if (!trySyncHydrateThumb(canvas, opts)) {
     btn.classList.add("thumb--loading");
     void hydrateThumbButton(btn, token, () => opts);
@@ -2002,6 +2266,7 @@ function clampCollabSelection() {
   }
   if (isCollabSelectionEmpty(next)) next.id = null;
   collabSelection = next;
+  enforceTraitLocks();
 }
 
 function renderStickerSubTabs() {
@@ -2092,12 +2357,14 @@ function renderThumbs() {
   let count;
   /** @type {(i: number) => HTMLButtonElement} */
   let factory;
-  if (cat === "skin") {
-    count = traitCatalog.skin.length;
-    factory = (i) => createTraitThumbButton(cat, i + 1, selection.skin === i + 1, token);
-  } else {
-    count = cat === "background" ? getCounts().background : getCounts()[cat];
+  if (cat === "background") {
+    count = getCounts().background;
     factory = (i) => createTraitThumbButton(cat, i, selection[cat] === i, token);
+  } else {
+    const entries = getCategoryPickerEntries(cat);
+    count = entries.length;
+    factory = (i) =>
+      createCategoryThumbButton(cat, entries[i], isCategoryEntrySelected(cat, entries[i]), token);
   }
 
   if (count > VIRTUAL_THUMB_THRESHOLD) {
@@ -2328,7 +2595,7 @@ btnStickerSearchApply?.addEventListener("click", () => {
   void applyStickerSearch();
 });
 
-/** Random skin only; clothes, hat, glasses, background, and sticker start empty. */
+/** Random skin only; other trait layers and sticker start empty. */
 function applyInitialState() {
   selection = { ...selection, skin: pickRandomSkinIndex() };
   stickerOverlay = defaultStickerOverlay();

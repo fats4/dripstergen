@@ -172,6 +172,20 @@ if (rebuildScan && !dryRun) {
     stdio: "inherit",
     cwd: process.cwd(),
   });
+  const collabSrc = path.join(process.cwd(), "src", "collab-manifest.json");
+  if (fs.existsSync(collabSrc)) {
+    const collabKey = keyPrefix ? `${keyPrefix}/_collab.json` : "_collab.json";
+    await client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: collabKey,
+        Body: fs.readFileSync(collabSrc),
+        ContentType: "application/json",
+        CacheControl: "no-cache",
+      }),
+    );
+    console.log(`upload-r2: uploaded s3://${bucket}/${collabKey}`);
+  }
 }
 
 const publicUrl = process.env.R2_PUBLIC_URL?.trim().replace(/\/+$/, "");

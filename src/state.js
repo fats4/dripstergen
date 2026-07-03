@@ -1,6 +1,10 @@
-/** @typedef {'background'|'clothes'|'glasses'|'hat'|'skin'} CategoryKey */
+/** @typedef {'background'|'frame'|'skin'|'clothes'|'glasses'|'hat'|'accessories'} CategoryKey */
 
-/** @typedef {{ label: string; accent: string; traits: Partial<Record<CategoryKey, string[]>> }} CollabPartnerDef */
+/** @typedef {Partial<Record<CategoryKey, string | string[]>>} TraitLockWhen */
+
+/** @typedef {{ when: TraitLockWhen; block: Partial<Record<CategoryKey, string[]>> }} CollabTraitLockRule */
+
+/** @typedef {{ label: string; accent: string; traits: Partial<Record<CategoryKey, string[]>>; traitLocks?: CollabTraitLockRule[] }} CollabPartnerDef */
 
 /** @type {readonly CategoryKey[]} */
 export const CATEGORY_KEYS = [
@@ -8,35 +12,47 @@ export const CATEGORY_KEYS = [
   "clothes",
   "glasses",
   "hat",
+  "frame",
+  "accessories",
   "background",
 ];
 
 /**
  * Layer draw order (back → front). Differs from CATEGORY_KEYS (tab UI order).
- * Hat/hair under glasses so frames stay visible on top.
+ * Frame sits above background but under body; accessories on top of wearable layers.
  */
 export const COMPOSITE_ORDER = /** @type {readonly CategoryKey[]} */ ([
   "background",
+  "frame",
   "skin",
   "clothes",
   "hat",
   "glasses",
+  "accessories",
 ]);
 
 /** @type {Record<CategoryKey, string>} */
 export const CATEGORY_LABELS = {
   background: "background",
+  frame: "frame",
   clothes: "clothes",
   glasses: "glasses",
   hat: "hat",
   skin: "skin",
+  accessories: "accessories",
 };
 
 /** Picker tabs: traits + sticker overlay picker */
 export const STICKERS_TAB = "stickers";
 
 /** Layer categories that can include collab variants (shown in the same tab with card styling) */
-export const COLLAB_LAYER_KEYS = /** @type {readonly CategoryKey[]} */ (["skin", "clothes", "hat"]);
+export const COLLAB_LAYER_KEYS = /** @type {readonly CategoryKey[]} */ ([
+  "skin",
+  "frame",
+  "clothes",
+  "hat",
+  "accessories",
+]);
 
 /** MONIGGA collab off in production by default; dev on. Opt-in: VITE_ENABLE_MONIGGA_COLLAB=true */
 function isMoniggaCollabDefaultEnabled() {
@@ -65,7 +81,9 @@ export function isCollabSkinEnabled() {
 /** @param {CategoryKey} cat */
 export function isCollabCategoryEnabled(cat) {
   if (cat === "skin") return isCollabSkinEnabled();
-  if (cat === "clothes" || cat === "hat") return isCollabTraitsEnabled();
+  if (cat === "frame" || cat === "clothes" || cat === "hat" || cat === "accessories") {
+    return isCollabTraitsEnabled();
+  }
   return false;
 }
 
@@ -106,11 +124,11 @@ export const PICKER_TAB_LABELS = {
 
 /** @typedef {string} CollabPartnerKey */
 
-/** @typedef {{ id: string | null; skin: number; clothes: number; hat: number }} CollabSelection */
+/** @typedef {{ id: string | null; skin: number; frame: number; clothes: number; hat: number; accessories: number }} CollabSelection */
 
 /** @returns {CollabSelection} */
 export function defaultCollabSelection() {
-  return { id: null, skin: 0, clothes: 0, hat: 0 };
+  return { id: null, skin: 0, frame: 0, clothes: 0, hat: 0, accessories: 0 };
 }
 
 /** @typedef {Record<CategoryKey, number>} Counts */
@@ -123,6 +141,8 @@ export function defaultSelection() {
     clothes: 0,
     glasses: 0,
     hat: 0,
+    frame: 0,
+    accessories: 0,
     background: 0,
   };
 }

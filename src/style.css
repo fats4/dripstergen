@@ -552,26 +552,54 @@ body {
 
 .thumb-collab-brand {
   position: absolute;
-  left: 0.35rem;
-  right: 0.35rem;
-  bottom: 0.32rem;
-  z-index: 3;
-  padding: 0.24rem 0.4rem;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  padding: 0.28rem 0.2rem 0.24rem;
   font-size: 0.5625rem;
   font-weight: 800;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   text-align: center;
   color: #fff;
-  border-radius: 5px;
-  background: rgb(10 10 12 / 0.68);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.28);
+  border-radius: 0 0 6px 6px;
+  background: rgb(0 0 0 / 0.82);
   pointer-events: none;
 }
 
 [data-theme="dark"] .thumb-collab-brand {
+  background: rgb(0 0 0 / 0.88);
+  color: #fff;
+}
+
+.thumb.thumb--locked {
+  cursor: not-allowed;
+}
+
+.thumb-lock-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.52);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  pointer-events: none;
+  font-size: 0.625rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.45);
+}
+
+[data-theme="dark"] .thumb-lock-overlay {
   background: rgb(0 0 0 / 0.62);
-  color: #f4f4f5;
+  color: #fff;
 }
 
 /* Only visible on the background tab (.is-visible toggled from JS) */
@@ -828,7 +856,7 @@ body {
   border-radius: 6px;
   box-shadow: inset 0 0 0 2px rgb(99 102 241 / 0.7);
   pointer-events: none;
-  z-index: 2;
+  z-index: 4;
 }
 
 [data-theme="dark"] .thumb[aria-selected="true"]::after {

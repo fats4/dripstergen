@@ -3,7 +3,7 @@
  *
  *   VITE_ASSETS_BASE_URL=https://assets.mondrips.com
  *
- * Empty = same origin (`/traits/...` from public/ or dist/).
+ * Empty = same origin `/traits/...` via R2 dev proxy when `VITE_R2_DEV_TRAITS=true`.
  *
  */
 
@@ -16,8 +16,14 @@ const EXPLICIT_BASE = (import.meta.env.VITE_ASSETS_BASE_URL ?? "").trim().replac
 export const ASSETS_BASE = EXPLICIT_BASE;
 
 /** @returns {boolean} */
+function usesR2DevTraits() {
+  const flag = (import.meta.env.VITE_R2_DEV_TRAITS ?? "").trim().toLowerCase();
+  return import.meta.env.DEV && flag !== "false" && flag !== "0" && flag.length > 0;
+}
+
+/** @returns {boolean} */
 export function usesRemoteAssets() {
-  return ASSETS_BASE.length > 0;
+  return ASSETS_BASE.length > 0 || usesR2DevTraits();
 }
 
 /**
@@ -28,7 +34,7 @@ export function usesRemoteAssets() {
  */
 function resolveTraitAssetPath(relPath) {
   const clean = relPath.startsWith("/") ? relPath : `/${relPath}`;
-  if (import.meta.env.DEV && ASSETS_BASE) {
+  if (import.meta.env.DEV && (ASSETS_BASE || usesR2DevTraits())) {
     return clean;
   }
   return joinAssetPath(clean);
@@ -62,7 +68,7 @@ export function traitsScanUrl() {
 
 /** @returns {string} */
 export function traitsCollabUrl() {
-  if (import.meta.env.DEV && ASSETS_BASE) {
+  if (import.meta.env.DEV && (ASSETS_BASE || usesR2DevTraits())) {
     return "/traits/_collab.json";
   }
   return joinAssetPath("/traits/_collab.json");

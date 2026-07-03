@@ -26,7 +26,8 @@ await page.locator("#thumbGrid .thumb--custom-bg").click();
 await page.fill("#backgroundColorHex", "#363636");
 await page.locator("#backgroundColorHex").press("Enter");
 
-await page.locator("nav.tabs button.tab", { hasText: "stickers" }).click();
+await page.locator("nav.tabs button.tab", { hasText: /^sticker$/i }).click();
+await page.locator("#stickerSubTabs button.sub-tab", { hasText: /skrumpeys/i }).click();
 await page.fill("#stickerSearchInput", "109");
 await page.click("#btnStickerSearchApply");
 await page.waitForTimeout(800);
