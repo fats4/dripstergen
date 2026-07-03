@@ -17,7 +17,7 @@ import { allCollabBlockedFilenames, loadCollabBlockedFilenames } from "./collab-
 const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
 const IMAGE_EXT = /\.(png|webp|jpe?g|svg)$/i;
 const includeCollab = process.argv.includes("--include-collab");
-const includeMoniggaStickers = process.argv.includes("--include-monigga-stickers");
+const excludeMoniggaStickers = process.argv.includes("--exclude-monigga-stickers");
 
 function loadDotEnv() {
   const envPath = path.join(process.cwd(), ".env");
@@ -87,7 +87,7 @@ do {
     if (parts.length !== 2) continue;
     const [cat, file] = parts;
     if (!TRAIT_CATEGORIES.includes(cat)) continue;
-    if (cat === "monigga" && !includeMoniggaStickers) continue;
+    if (cat === "monigga" && excludeMoniggaStickers) continue;
     if (!IMAGE_EXT.test(file) || file === "manifest.json") continue;
     const fileLower = file.toLowerCase();
     if (collabBlockedAll.has(fileLower)) continue;

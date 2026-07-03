@@ -67,6 +67,12 @@ export function traitsScanUrl() {
 }
 
 /** @returns {string} */
+export function traitsMoniggaStickersUrl() {
+  if (usesRemoteAssets()) return "/traits/_monigga-stickers.json";
+  return joinAssetPath("/traits/_monigga-stickers.json");
+}
+
+/** @returns {string} */
 export function traitsCollabUrl() {
   if (usesRemoteAssets()) return "/traits/_collab.json";
   return joinAssetPath("/traits/_collab.json");

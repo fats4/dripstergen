@@ -7,6 +7,7 @@ import {
   traitsManifestUrl,
   traitsScanUrl,
   traitsCollabUrl,
+  traitsMoniggaStickersUrl,
   usesRemoteAssets,
 } from "./assets.js";
 import { getCachedImage, LruImageCache } from "./image-cache.js";
@@ -1282,21 +1283,25 @@ async function loadStickerCatalog() {
     /* manifest optional */
   }
 
-  if (import.meta.env.DEV && isMoniggaStickersEnabled()) {
-    try {
-      const res = await fetch("/traits/_dev-monigga-stickers.json", { cache: "no-store" });
-      if (res.ok) {
+  if (isMoniggaStickersEnabled()) {
+    const moniggaListUrls = import.meta.env.DEV
+      ? ["/traits/_dev-monigga-stickers.json"]
+      : [traitsMoniggaStickersUrl(), "/traits/_monigga-stickers.json"];
+    for (const url of moniggaListUrls) {
+      try {
+        const res = await fetch(url, { cache: usesRemoteAssets() ? "default" : "no-store" });
+        if (!res.ok) continue;
         const list = await res.json();
-        if (Array.isArray(list)) {
-          for (const name of list) {
-            if (typeof name === "string" && name) {
-              bySource.monigga.add(stickerSourceAssetUrl("monigga", name));
-            }
+        if (!Array.isArray(list)) continue;
+        for (const name of list) {
+          if (typeof name === "string" && name) {
+            bySource.monigga.add(stickerSourceAssetUrl("monigga", name));
           }
         }
+        break;
+      } catch {
+        /* try next source */
       }
-    } catch {
-      /* dev-only monigga sticker list */
     }
   }
 
