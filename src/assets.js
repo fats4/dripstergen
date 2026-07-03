@@ -68,9 +68,7 @@ export function traitsScanUrl() {
 
 /** @returns {string} */
 export function traitsCollabUrl() {
-  if (import.meta.env.DEV && (ASSETS_BASE || usesR2DevTraits())) {
-    return "/traits/_collab.json";
-  }
+  if (usesRemoteAssets()) return "/traits/_collab.json";
   return joinAssetPath("/traits/_collab.json");
 }
 
