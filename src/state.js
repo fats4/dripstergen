@@ -124,11 +124,20 @@ export const PICKER_TAB_LABELS = {
 
 /** @typedef {string} CollabPartnerKey */
 
-/** @typedef {{ id: string | null; skin: number; frame: number; clothes: number; hat: number; accessories: number }} CollabSelection */
+/** @typedef {typeof COLLAB_LAYER_KEYS[number]} CollabLayerKey */
+
+/** @typedef {{
+ *   skin: number;
+ *   frame: number;
+ *   clothes: number;
+ *   hat: number;
+ *   accessories: number;
+ *   partner: Partial<Record<CollabLayerKey, string>>;
+ * }} CollabSelection */
 
 /** @returns {CollabSelection} */
 export function defaultCollabSelection() {
-  return { id: null, skin: 0, frame: 0, clothes: 0, hat: 0, accessories: 0 };
+  return { skin: 0, frame: 0, clothes: 0, hat: 0, accessories: 0, partner: {} };
 }
 
 /** @typedef {Record<CategoryKey, number>} Counts */

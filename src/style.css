@@ -568,9 +568,19 @@ body {
   pointer-events: none;
 }
 
+.thumb--collab-labeled[style*="--collab-accent"] .thumb-collab-brand {
+  color: #0f1113;
+  background: var(--collab-accent);
+}
+
 [data-theme="dark"] .thumb-collab-brand {
   background: rgb(0 0 0 / 0.88);
   color: #fff;
+}
+
+[data-theme="dark"] .thumb--collab-labeled[style*="--collab-accent"] .thumb-collab-brand {
+  color: #0f1113;
+  background: var(--collab-accent);
 }
 
 .thumb.thumb--locked {

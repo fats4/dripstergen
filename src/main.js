@@ -477,15 +477,13 @@ async function applyCollabManifest(catalog) {
   if (!isCollabSkinEnabled() && !isCollabTraitsEnabled()) {
     collabSelection = defaultCollabSelection();
   } else if (!isCollabSkinEnabled()) {
-    collabSelection = { ...collabSelection, skin: 0 };
-    if (isCollabSelectionEmpty()) collabSelection = { ...collabSelection, id: null };
+    collabSelection = withoutCollabCategory(collabSelection, "skin");
   } else if (!isCollabTraitsEnabled()) {
-    const next = { ...collabSelection };
+    let next = { ...collabSelection, partner: { ...collabSelection.partner } };
     for (const cat of COLLAB_LAYER_KEYS) {
       if (cat === "skin") continue;
-      next[cat] = 0;
+      next = withoutCollabCategory(next, cat);
     }
-    if (isCollabSelectionEmpty(next)) next.id = null;
     collabSelection = next;
   }
 
@@ -563,11 +561,59 @@ function isCollabSelectionEmpty(/** @type {CollabSelection} */ sel = collabSelec
 
 /**
  * @param {CategoryKey} cat
+ * @param {CollabSelection} [sel]
+ * @returns {CollabPartnerKey | null}
+ */
+function collabPartnerFor(cat, sel = collabSelection) {
+  if (!COLLAB_LAYER_KEYS.includes(cat)) return null;
+  const partnerId = sel.partner?.[cat];
+  if (!partnerId || !collabCatalog[partnerId]) return null;
+  return /** @type {CollabPartnerKey} */ (partnerId);
+}
+
+/**
+ * @param {CollabSelection} [sel]
+ * @returns {CollabPartnerKey[]}
+ */
+function activeCollabPartners(sel = collabSelection) {
+  /** @type {Set<CollabPartnerKey>} */
+  const partners = new Set();
+  for (const cat of COLLAB_LAYER_KEYS) {
+    if (sel[cat] <= 0) continue;
+    const partnerId = collabPartnerFor(cat, sel);
+    if (partnerId) partners.add(partnerId);
+  }
+  return [...partners];
+}
+
+/**
+ * @param {CollabSelection} sel
+ * @param {CategoryKey} cat
+ * @returns {CollabSelection}
+ */
+function withoutCollabCategory(sel, cat) {
+  if (!COLLAB_LAYER_KEYS.includes(cat)) return sel;
+  const partner = { ...sel.partner };
+  delete partner[cat];
+  return { ...sel, [cat]: 0, partner };
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @returns {string | null}
+ */
+function activeCollabLayerUrl(cat) {
+  const partnerId = collabPartnerFor(cat);
+  if (!partnerId || collabSelection[cat] <= 0) return null;
+  return collabFullUrl(partnerId, cat, collabSelection[cat]);
+}
+
+/**
+ * @param {CategoryKey} cat
  * @returns {string | null}
  */
 function getActiveCollabTraitFilename(cat) {
-  if (!collabSelection.id || collabSelection[cat] <= 0) return null;
-  const url = collabFullUrl(collabSelection.id, cat, collabSelection[cat]);
+  const url = activeCollabLayerUrl(cat);
   return url ? urlBasename(url) : null;
 }
 
@@ -577,7 +623,7 @@ function getActiveCollabTraitFilename(cat) {
  * @returns {string | null}
  */
 function getActiveTraitFilename(cat) {
-  if (COLLAB_LAYER_KEYS.includes(cat) && collabSelection.id && collabSelection[cat] > 0) {
+  if (COLLAB_LAYER_KEYS.includes(cat) && collabSelection[cat] > 0) {
     const collabFile = getActiveCollabTraitFilename(cat);
     if (collabFile) return collabFile;
   }
@@ -652,7 +698,12 @@ function isCategoryEntryLocked(cat, entry) {
 
   if (isEntryBlockedByLockRules(globalTraitLocks, cat, entryFile)) return true;
 
-  const partnerId = entry.kind === "collab" ? entry.collabId : collabSelection.id;
+  for (const partnerId of activeCollabPartners()) {
+    const activeLocks = collabTraitLocks[partnerId];
+    if (activeLocks?.length && isEntryBlockedByLockRules(activeLocks, cat, entryFile)) return true;
+  }
+
+  const partnerId = entry.kind === "collab" ? entry.collabId : collabPartnerFor(cat);
   const locks = partnerId ? collabTraitLocks[partnerId] : null;
   if (!locks?.length) return false;
   return isEntryBlockedByLockRules(locks, cat, entryFile);
@@ -662,18 +713,30 @@ function isCategoryEntryLocked(cat, entry) {
 function enforceTraitLocks() {
   let changed = false;
   /** @type {CollabSelection} */
-  const nextCollab = { ...collabSelection };
+  const nextCollab = { ...collabSelection, partner: { ...collabSelection.partner } };
   /** @type {Selection} */
   let nextSelection = { ...selection };
 
   for (const cat of COLLAB_LAYER_KEYS) {
     if (nextCollab[cat] <= 0) continue;
-    const url = collabFullUrl(collabSelection.id, cat, nextCollab[cat]);
-    if (!url) continue;
+    const partnerId = collabPartnerFor(cat, nextCollab);
+    if (!partnerId) {
+      nextCollab[cat] = 0;
+      delete nextCollab.partner[cat];
+      changed = true;
+      continue;
+    }
+    const url = collabFullUrl(partnerId, cat, nextCollab[cat]);
+    if (!url) {
+      nextCollab[cat] = 0;
+      delete nextCollab.partner[cat];
+      changed = true;
+      continue;
+    }
     /** @type {CollabThumbEntry} */
     const entry = {
       kind: "collab",
-      collabId: collabSelection.id,
+      collabId: partnerId,
       category: cat,
       index: nextCollab[cat],
       url,
@@ -681,6 +744,7 @@ function enforceTraitLocks() {
     };
     if (!isCategoryEntryLocked(cat, entry)) continue;
     nextCollab[cat] = 0;
+    delete nextCollab.partner[cat];
     changed = true;
   }
 
@@ -694,7 +758,6 @@ function enforceTraitLocks() {
   }
 
   if (!changed) return false;
-  if (isCollabSelectionEmpty(nextCollab)) nextCollab.id = null;
   collabSelection = nextCollab;
   selection = nextSelection;
   for (const cat of COLLAB_LAYER_KEYS) {
@@ -767,7 +830,7 @@ function isCategoryEntrySelected(cat, entry) {
   if (entry.kind === "regular") {
     return selection[cat] === entry.index && collabPickerIndex(cat) === 0;
   }
-  return collabSelection.id === entry.collabId && collabSelection[cat] === entry.index;
+  return collabPartnerFor(cat) === entry.collabId && collabSelection[cat] === entry.index;
 }
 
 /**
@@ -789,15 +852,16 @@ async function onCategoryEntryClick(cat, entry) {
   } else {
     const wasSelected = isCategoryEntrySelected(cat, entry);
     if (wasSelected) {
-      collabSelection = { ...collabSelection, [cat]: 0 };
-      if (isCollabSelectionEmpty()) {
-        collabSelection = { ...collabSelection, id: null };
-      }
+      collabSelection = withoutCollabCategory(collabSelection, cat);
       if (cat === "skin") {
         selection = { ...selection, skin: pickRandomSkinIndex() || 1 };
       }
     } else {
-      collabSelection = { ...collabSelection, id: entry.collabId, [cat]: entry.index };
+      collabSelection = {
+        ...collabSelection,
+        [cat]: entry.index,
+        partner: { ...collabSelection.partner, [cat]: entry.collabId },
+      };
       selection = { ...selection, [cat]: 0 };
       prefetchUrl = entry.url;
     }
@@ -847,21 +911,16 @@ function collabFullUrl(collabId, cat, pickerIndex) {
  * @returns {string | null}
  */
 function resolveLayerUrl(cat, selIndex) {
-  if (isCollabCategoryEnabled(cat) && collabSelection.id) {
-    const collabIdx = collabSelection[cat];
-    if (collabIdx > 0) {
-      const url = collabFullUrl(collabSelection.id, cat, collabIdx);
-      if (url) return url;
-    }
+  if (isCollabCategoryEnabled(cat)) {
+    const url = activeCollabLayerUrl(cat);
+    if (url) return url;
   }
   return traitFullUrl(cat, selIndex);
 }
 
 function clearCollabForCategory(cat) {
   if (!COLLAB_LAYER_KEYS.includes(cat)) return;
-  const next = { ...collabSelection, [cat]: 0 };
-  if (isCollabSelectionEmpty(next)) next.id = null;
-  collabSelection = next;
+  collabSelection = withoutCollabCategory(collabSelection, cat);
 }
 
 /**
@@ -1052,7 +1111,7 @@ function clampSelection() {
   const counts = getCounts();
   for (const key of CATEGORY_KEYS) {
     if (key === "skin" && traitCatalog.skin.length > 0) {
-      const hasCollabSkin = isCollabSkinEnabled() && collabSelection.id && collabSelection.skin > 0;
+      const hasCollabSkin = isCollabSkinEnabled() && collabSelection.skin > 0 && collabPartnerFor("skin");
       if (hasCollabSkin) {
         selection[key] = 0;
       } else {
@@ -2079,7 +2138,7 @@ function createCollabThumbButton(entry, selected, token) {
   const meta = collabCatalog[entry.collabId];
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "thumb thumb--collab-labeled thumb--monigga";
+  btn.className = `thumb thumb--collab-labeled thumb--${entry.collabId}`;
   btn.setAttribute("aria-selected", selected ? "true" : "false");
   btn.title = `${meta?.label ?? entry.collabId} · ${entry.label}`;
 
@@ -2089,6 +2148,7 @@ function createCollabThumbButton(entry, selected, token) {
   const brand = document.createElement("span");
   brand.className = "thumb-collab-brand";
   brand.textContent = meta?.label ?? entry.collabId;
+  if (meta?.accent) btn.style.setProperty("--collab-accent", meta.accent);
   btn.appendChild(brand);
 
   const thumbLayout = /** @type {ThumbLayout} */ (
@@ -2259,17 +2319,22 @@ function mountVirtualThumbGrid(count, token, factory) {
 }
 
 function clampCollabSelection() {
-  if (!collabSelection.id || !collabCatalog[collabSelection.id]) {
-    collabSelection = defaultCollabSelection();
-    return;
-  }
   /** @type {CollabSelection} */
-  const next = { ...collabSelection };
+  let next = { ...collabSelection, partner: { ...collabSelection.partner } };
   for (const cat of COLLAB_LAYER_KEYS) {
-    const max = collabCatalog[collabSelection.id][cat].length;
+    if (next[cat] <= 0) {
+      delete next.partner[cat];
+      continue;
+    }
+    const partnerId = collabPartnerFor(cat, next);
+    if (!partnerId) {
+      next = withoutCollabCategory(next, cat);
+      continue;
+    }
+    const max = collabCatalog[partnerId][cat].length;
     next[cat] = Math.max(0, Math.min(next[cat], max));
+    if (next[cat] === 0) next = withoutCollabCategory(next, cat);
   }
-  if (isCollabSelectionEmpty(next)) next.id = null;
   collabSelection = next;
   enforceTraitLocks();
 }

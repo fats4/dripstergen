@@ -32,5 +32,30 @@
         }
       }
     ]
+  },
+  "lilstar": {
+    "label": "LILSTAR",
+    "accent": "#f5c542",
+    "traits": {
+      "accessories": [
+        "Moyaki_hat_1.webp",
+        "Moyaki_hat_2.webp",
+        "Moyaki_hat_3.webp",
+        "Moyaki_hat_4.webp"
+      ]
+    },
+    "traitLocks": [
+      {
+        "when": {
+          "accessories": [
+            "Moyaki_hat_1.webp",
+            "Moyaki_hat_2.webp",
+            "Moyaki_hat_3.webp",
+            "Moyaki_hat_4.webp"
+          ]
+        },
+        "block": { "frame": ["mon_frame.webp"] }
+      }
+    ]
   }
 }
