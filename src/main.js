@@ -57,10 +57,16 @@ const COLLAB_THUMB_BRAND_INSET = THUMB * 0.19;
 
 /** @typedef {'default' | 'collab-clothes'} ThumbLayout */
 const IMAGE_CACHE_MAX = 300;
+const IMAGE_CACHE_MAX_MOBILE = 48;
 /** Painted thumb bitmaps — instant restore when virtual scroll remounts cells */
 const THUMB_PAINT_CACHE_MAX = 600;
+const THUMB_PAINT_CACHE_MAX_MOBILE = 0;
 /** Above this count, thumb grid uses virtual scroll (for 3000+ assets) */
 const VIRTUAL_THUMB_THRESHOLD = 60;
+const VIRTUAL_THUMB_THRESHOLD_MOBILE = 12;
+const THUMB_HYDRATE_MAX = 6;
+const THUMB_HYDRATE_MAX_MOBILE = 2;
+const PICKER_TAP_GUARD_MS = 90;
 
 const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
 /** Fresh CORS-only images for PNG export — never shared with preview cache. */
@@ -309,6 +315,95 @@ const traitGlobModules = import.meta.glob("./traits/**/*.{png,webp,jpg,jpeg,svg}
 
 let thumbRenderToken = 0;
 let thumbScrollRaf = 0;
+let thumbRenderScheduleRaf = 0;
+let previewRenderToken = 0;
+let lastPickerInteractionAt = 0;
+let thumbHydrateActive = 0;
+/** @type {Array<() => Promise<void>>} */
+const thumbHydrateQueue = [];
+
+/** @returns {boolean} */
+function isMobilePickerDevice() {
+  return (
+    window.matchMedia("(pointer: coarse)").matches ||
+    window.matchMedia("(hover: none)").matches ||
+    window.innerWidth < 768
+  );
+}
+
+/** Mobile uses lazy <img> thumbs — avoids hundreds of large canvases (Safari OOM). */
+function useSimpleMobileThumbs() {
+  return isMobilePickerDevice();
+}
+
+/** @returns {number} */
+function effectiveVirtualThreshold() {
+  return isMobilePickerDevice() ? VIRTUAL_THUMB_THRESHOLD_MOBILE : VIRTUAL_THUMB_THRESHOLD;
+}
+
+/** @returns {boolean} */
+function consumePickerInteraction() {
+  const gap = isMobilePickerDevice() ? PICKER_TAP_GUARD_MS : 0;
+  if (gap <= 0) return true;
+  const now = performance.now();
+  if (now - lastPickerInteractionAt < gap) return false;
+  lastPickerInteractionAt = now;
+  return true;
+}
+
+function cancelThumbHydrateQueue() {
+  thumbHydrateQueue.length = 0;
+}
+
+function drainThumbHydrateQueue() {
+  const max = isMobilePickerDevice() ? THUMB_HYDRATE_MAX_MOBILE : THUMB_HYDRATE_MAX;
+  while (thumbHydrateActive < max && thumbHydrateQueue.length > 0) {
+    const job = thumbHydrateQueue.shift();
+    if (!job) break;
+    thumbHydrateActive += 1;
+    void job().finally(() => {
+      thumbHydrateActive -= 1;
+      drainThumbHydrateQueue();
+    });
+  }
+}
+
+/**
+ * @param {() => Promise<void>} job
+ */
+function scheduleHydrateThumb(job) {
+  if (useSimpleMobileThumbs()) return;
+  thumbHydrateQueue.push(job);
+  drainThumbHydrateQueue();
+}
+
+/** @returns {number} */
+function maxThumbPaintCacheEntries() {
+  return isMobilePickerDevice() ? THUMB_PAINT_CACHE_MAX_MOBILE : THUMB_PAINT_CACHE_MAX;
+}
+
+function trimImageCacheForDevice() {
+  const cap = isMobilePickerDevice() ? IMAGE_CACHE_MAX_MOBILE : IMAGE_CACHE_MAX;
+  while (imageCache.map.size > cap) {
+    const oldest = imageCache.map.keys().next().value;
+    if (oldest) imageCache.map.delete(oldest);
+  }
+}
+
+function scheduleRenderThumbs() {
+  cancelAnimationFrame(thumbRenderScheduleRaf);
+  const run = () => {
+    thumbRenderScheduleRaf = 0;
+    renderThumbs();
+  };
+  if (isMobilePickerDevice()) {
+    thumbRenderScheduleRaf = requestAnimationFrame(() => {
+      thumbRenderScheduleRaf = requestAnimationFrame(run);
+    });
+    return;
+  }
+  thumbRenderScheduleRaf = requestAnimationFrame(run);
+}
 
 /** @type {{ token: number; count: number; cols: number; startRow: number; endRow: number } | null} */
 let virtualThumbMount = null;
@@ -838,6 +933,7 @@ function isCategoryEntrySelected(cat, entry) {
  * @param {CategoryPickerEntry} entry
  */
 async function onCategoryEntryClick(cat, entry) {
+  if (!consumePickerInteraction()) return;
   if (entry.kind !== "empty" && isCategoryEntryLocked(cat, entry)) return;
 
   /** @type {string | null} */
@@ -866,9 +962,13 @@ async function onCategoryEntryClick(cat, entry) {
       prefetchUrl = entry.url;
     }
   }
-  enforceTraitLocks();
+  const locksChanged = enforceTraitLocks();
   syncSeed();
-  renderThumbs();
+  if (locksChanged) {
+    scheduleRenderThumbs();
+  } else {
+    updatePickerSelectionHighlight(cat);
+  }
   if (prefetchUrl) await getCachedImage(imageCache, prefetchUrl).catch(() => null);
   await renderPreview();
 }
@@ -1073,17 +1173,19 @@ function getThumbGridMetrics() {
  * @param {Selection} sel
  * @returns {Promise<void>}
  */
-async function prefetchSelectionLayers(sel = selection) {
+async function prefetchSelectionLayers(sel = selection, token = previewRenderToken) {
   /** @type {string[]} */
   const urls = [];
   for (const key of COMPOSITE_ORDER) {
+    if (token !== previewRenderToken) return;
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
     const url = resolveLayerUrl(key, sel[key]);
     if (url) urls.push(url);
   }
-  await Promise.all(
-    urls.map((url) => getCachedImage(imageCache, url).catch(() => null)),
-  );
+  for (const url of urls) {
+    if (token !== previewRenderToken) return;
+    await getCachedImage(imageCache, url).catch(() => null);
+  }
 }
 
 /**
@@ -1635,9 +1737,13 @@ async function loadExportLayers(sel = selection) {
 }
 
 async function renderPreview() {
-  await prefetchSelectionLayers();
+  previewRenderToken += 1;
+  const token = previewRenderToken;
+  await prefetchSelectionLayers(selection, token);
+  if (token !== previewRenderToken) return;
   if (stickerOverlay.index > 0) {
     await refreshActiveStickerImage();
+    if (token !== previewRenderToken) return;
   }
   drawComposite(previewCtx, selection);
 }
@@ -1646,8 +1752,34 @@ async function renderPreview() {
  * @returns {HTMLCanvasElement}
  */
 function thumbCanvasPixelSize() {
-  const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-  return Math.max(256, Math.round(THUMB * dpr * 2.5));
+  const mobile = isMobilePickerDevice();
+  const dpr = Math.min(window.devicePixelRatio || 1, mobile ? 1.5 : 2.5);
+  const scale = mobile ? 1.25 : 2.5;
+  const px = Math.round(THUMB * dpr * scale);
+  const maxPx = mobile ? 192 : 512;
+  const minPx = mobile ? 96 : 256;
+  return Math.min(maxPx, Math.max(minPx, px));
+}
+
+function createEmptyThumbPlaceholder() {
+  const el = document.createElement("span");
+  el.className = "thumb-placeholder";
+  el.setAttribute("aria-hidden", "true");
+  return el;
+}
+
+/**
+ * @param {string} src
+ * @returns {HTMLImageElement}
+ */
+function createLazyThumbImage(src) {
+  const img = document.createElement("img");
+  img.className = "thumb-img";
+  img.alt = "";
+  img.decoding = "async";
+  img.loading = "lazy";
+  img.src = src;
+  return img;
 }
 
 function createThumbCanvas() {
@@ -1685,6 +1817,7 @@ function getThumbPaintCache(key) {
  * @param {HTMLCanvasElement} canvas
  */
 function setThumbPaintCache(key, canvas) {
+  if (useSimpleMobileThumbs()) return;
   const px = thumbCanvasPixelSize();
   const clone = document.createElement("canvas");
   clone.width = px;
@@ -1694,7 +1827,7 @@ function setThumbPaintCache(key, canvas) {
   ctx.drawImage(canvas, 0, 0);
   if (thumbPaintCache.has(key)) thumbPaintCache.delete(key);
   thumbPaintCache.set(key, clone);
-  while (thumbPaintCache.size > THUMB_PAINT_CACHE_MAX) {
+  while (thumbPaintCache.size > maxThumbPaintCacheEntries()) {
     const oldest = thumbPaintCache.keys().next().value;
     if (oldest) thumbPaintCache.delete(oldest);
   }
@@ -1706,6 +1839,7 @@ function setThumbPaintCache(key, canvas) {
  * @returns {boolean}
  */
 function restorePaintedThumb(canvas, cacheKey) {
+  if (useSimpleMobileThumbs()) return false;
   const src = getThumbPaintCache(cacheKey);
   if (!src || src.width !== canvas.width || src.height !== canvas.height) return false;
   const tctx = canvas.getContext("2d");
@@ -1997,7 +2131,7 @@ function trySyncHydrateThumb(canvas, opts) {
   }
 
   paintThumbCanvas(canvas, cached, contain, crop, layout);
-  setThumbPaintCache(paintKey, canvas);
+  if (!useSimpleMobileThumbs()) setThumbPaintCache(paintKey, canvas);
   return true;
 }
 
@@ -2019,11 +2153,15 @@ async function hydrateThumbButton(btn, token, getUrls) {
   const paint = async (/** @type {HTMLImageElement} */ img) => {
     let crop = null;
     if (cropToContent && cacheUrl) {
-      crop = await getImageAlphaBounds(img, cacheUrl);
+      try {
+        crop = await getImageAlphaBounds(img, cacheUrl);
+      } catch {
+        crop = null;
+      }
     }
     if (token !== thumbRenderToken || !btn.isConnected) return;
     paintThumbCanvas(canvas, img, contain, crop, layout);
-    if (paintKey) setThumbPaintCache(paintKey, canvas);
+    if (paintKey && !useSimpleMobileThumbs()) setThumbPaintCache(paintKey, canvas);
     btn.classList.remove("thumb--loading");
   };
 
@@ -2073,31 +2211,44 @@ function createTraitThumbButton(cat, index, selected, token) {
     btn.setAttribute("aria-label", "None");
   }
 
-  const canvas = createThumbCanvas();
-  if (index === 0) {
-    drawEmptyThumb(canvas);
-  } else if (cat === "background" && isCustomBackgroundIndex(index)) {
-    drawCustomBackgroundThumb(canvas);
+  if (useSimpleMobileThumbs()) {
+    if (index === 0) {
+      btn.appendChild(createEmptyThumbPlaceholder());
+    } else if (cat === "background" && isCustomBackgroundIndex(index)) {
+      const canvas = createThumbCanvas();
+      drawCustomBackgroundThumb(canvas);
+      btn.appendChild(canvas);
+    } else if (index > 0) {
+      const fullUrl = traitFullUrl(cat, index);
+      if (fullUrl) btn.appendChild(createLazyThumbImage(fullUrl));
+    }
+  } else {
+    const canvas = createThumbCanvas();
+    if (index === 0) {
+      drawEmptyThumb(canvas);
+    } else if (cat === "background" && isCustomBackgroundIndex(index)) {
+      drawCustomBackgroundThumb(canvas);
+    }
+    btn.appendChild(canvas);
+
+    if (index > 0 && !(cat === "background" && isCustomBackgroundIndex(index))) {
+      const fullUrl = traitFullUrl(cat, index);
+      const opts =
+        cat === "background"
+          ? { thumbUrl: null, fullUrl, contain: true }
+          : { thumbUrl: null, fullUrl, cropToContent: true };
+      if (!trySyncHydrateThumb(canvas, opts)) {
+        btn.classList.add("thumb--loading");
+        scheduleHydrateThumb(() => hydrateThumbButton(btn, token, () => opts));
+      }
+    }
   }
-  btn.appendChild(canvas);
 
   if (cat === "background" && isCustomBackgroundIndex(index)) {
     const badge = document.createElement("span");
     badge.className = "thumb-custom-bg-badge";
     badge.textContent = "Custom";
     btn.appendChild(badge);
-  }
-
-  if (index > 0 && !(cat === "background" && isCustomBackgroundIndex(index))) {
-    const fullUrl = traitFullUrl(cat, index);
-    const opts =
-      cat === "background"
-        ? { thumbUrl: null, fullUrl, contain: true }
-        : { thumbUrl: null, fullUrl, cropToContent: true };
-    if (!trySyncHydrateThumb(canvas, opts)) {
-      btn.classList.add("thumb--loading");
-      void hydrateThumbButton(btn, token, () => opts);
-    }
   }
 
   btn.addEventListener("click", () => {
@@ -2111,13 +2262,18 @@ function createTraitThumbButton(cat, index, selected, token) {
  * @param {number} index
  */
 async function onTraitThumbClick(cat, index) {
+  if (!consumePickerInteraction()) return;
   if (COLLAB_LAYER_KEYS.includes(cat)) {
     clearCollabForCategory(cat);
   }
   selection = { ...selection, [cat]: index };
-  enforceTraitLocks();
+  const locksChanged = enforceTraitLocks();
   syncSeed();
-  renderThumbs();
+  if (locksChanged) {
+    scheduleRenderThumbs();
+  } else {
+    updatePickerSelectionHighlight(cat);
+  }
   if (cat === "background" && isCustomBackgroundIndex(index)) {
     backgroundColorInput?.click();
     await renderPreview();
@@ -2142,22 +2298,28 @@ function createCollabThumbButton(entry, selected, token) {
   btn.setAttribute("aria-selected", selected ? "true" : "false");
   btn.title = `${meta?.label ?? entry.collabId} · ${entry.label}`;
 
-  const canvas = createThumbCanvas();
-  btn.appendChild(canvas);
-
   const brand = document.createElement("span");
   brand.className = "thumb-collab-brand";
   brand.textContent = meta?.label ?? entry.collabId;
   if (meta?.accent) btn.style.setProperty("--collab-accent", meta.accent);
-  btn.appendChild(brand);
 
-  const thumbLayout = /** @type {ThumbLayout} */ (
-    entry.category === "clothes" ? "collab-clothes" : "default"
-  );
-  const opts = { thumbUrl: null, fullUrl: entry.url, cropToContent: true, layout: thumbLayout };
-  if (!trySyncHydrateThumb(canvas, opts)) {
-    btn.classList.add("thumb--loading");
-    void hydrateThumbButton(btn, token, () => opts);
+  if (useSimpleMobileThumbs()) {
+    const img = createLazyThumbImage(entry.url);
+    if (entry.category === "clothes") img.classList.add("thumb-img--collab-clothes");
+    btn.appendChild(img);
+    btn.appendChild(brand);
+  } else {
+    const canvas = createThumbCanvas();
+    btn.appendChild(canvas);
+    btn.appendChild(brand);
+    const thumbLayout = /** @type {ThumbLayout} */ (
+      entry.category === "clothes" ? "collab-clothes" : "default"
+    );
+    const opts = { thumbUrl: null, fullUrl: entry.url, cropToContent: true, layout: thumbLayout };
+    if (!trySyncHydrateThumb(canvas, opts)) {
+      btn.classList.add("thumb--loading");
+      scheduleHydrateThumb(() => hydrateThumbButton(btn, token, () => opts));
+    }
   }
 
   btn.addEventListener("click", () => {
@@ -2179,18 +2341,27 @@ function createStickerThumbButton(index, selected, token) {
   btn.setAttribute("aria-selected", selected ? "true" : "false");
   btn.dataset.index = String(index);
 
-  const canvas = createThumbCanvas();
-  if (index === 0) {
-    drawEmptyThumb(canvas);
-  }
-  btn.appendChild(canvas);
+  if (useSimpleMobileThumbs()) {
+    if (index === 0) {
+      btn.appendChild(createEmptyThumbPlaceholder());
+    } else {
+      const fullUrl = stickerFullUrl(activeStickerSubTab, index);
+      if (fullUrl) btn.appendChild(createLazyThumbImage(fullUrl));
+    }
+  } else {
+    const canvas = createThumbCanvas();
+    if (index === 0) {
+      drawEmptyThumb(canvas);
+    }
+    btn.appendChild(canvas);
 
-  if (index > 0) {
-    const fullUrl = stickerFullUrl(activeStickerSubTab, index);
-    const opts = { thumbUrl: null, fullUrl, contain: true };
-    if (!trySyncHydrateThumb(canvas, opts)) {
-      btn.classList.add("thumb--loading");
-      void hydrateThumbButton(btn, token, () => opts);
+    if (index > 0) {
+      const fullUrl = stickerFullUrl(activeStickerSubTab, index);
+      const opts = { thumbUrl: null, fullUrl, contain: true };
+      if (!trySyncHydrateThumb(canvas, opts)) {
+        btn.classList.add("thumb--loading");
+        scheduleHydrateThumb(() => hydrateThumbButton(btn, token, () => opts));
+      }
     }
   }
 
@@ -2204,6 +2375,7 @@ function createStickerThumbButton(index, selected, token) {
  * @param {number} index
  */
 async function onStickerThumbClick(index) {
+  if (!consumePickerInteraction()) return;
   stickerOverlay = { ...stickerOverlay, source: activeStickerSubTab, index };
   await refreshActiveStickerImage();
   persistStickerOverlay();
@@ -2213,7 +2385,7 @@ async function onStickerThumbClick(index) {
       index > 0 ? stickerIdFromPickerIndex(activeStickerSubTab, index) : "";
     setStickerSearchFeedback("");
   }
-  renderThumbs();
+  updatePickerSelectionHighlight(STICKERS_TAB);
   await renderPreview();
 }
 
@@ -2234,7 +2406,7 @@ async function applyStickerSearch() {
   persistStickerOverlay();
   syncStickerOverlayUi();
   stickerSearchInput.value = stickerIdFromPickerIndex(activeStickerSubTab, index);
-  renderThumbs();
+  updatePickerSelectionHighlight(STICKERS_TAB);
   scrollThumbGridToIndex(index);
   await renderPreview();
 }
@@ -2268,8 +2440,9 @@ function mountVirtualThumbGrid(count, token, factory) {
   const totalRows = Math.ceil(count / cols);
   const viewH = thumbGrid.clientHeight || 400;
   const scrollTop = thumbGrid.scrollTop;
-  const startRow = Math.max(0, Math.floor(scrollTop / rowHeight) - 2);
-  const endRow = Math.min(totalRows, Math.ceil((scrollTop + viewH) / rowHeight) + 2);
+  const buffer = isMobilePickerDevice() ? 1 : 2;
+  const startRow = Math.max(0, Math.floor(scrollTop / rowHeight) - buffer);
+  const endRow = Math.min(totalRows, Math.ceil((scrollTop + viewH) / rowHeight) + buffer);
 
   if (
     virtualThumbMount &&
@@ -2362,7 +2535,7 @@ function renderStickerSubTabs() {
       activeStickerSubTab = key;
       renderStickerSubTabs();
       syncStickerSearchUi();
-      renderThumbs();
+      scheduleRenderThumbs();
     });
     stickerSubTabsEl.appendChild(btn);
   }
@@ -2379,22 +2552,103 @@ function renderTabs() {
     btn.textContent = PICKER_TAB_LABELS[key];
     btn.setAttribute("aria-selected", key === activeTab ? "true" : "false");
     btn.addEventListener("click", () => {
+      if (activeTab === key) return;
       activeTab = key;
       renderTabs();
       syncBackgroundColorUi();
       syncStickerSearchUi();
       syncStickerOverlayUi();
-      renderThumbs();
+      scheduleRenderThumbs();
     });
     tabsEl.appendChild(btn);
   }
   renderStickerSubTabs();
 }
 
+/**
+ * Update selected ring on existing thumbs without rebuilding canvases (avoids mobile OOM on rapid taps).
+ * @param {CategoryKey | typeof STICKERS_TAB} cat
+ */
+function updatePickerSelectionHighlight(cat) {
+  if (!thumbGrid) return;
+
+  if (thumbGrid.classList.contains("thumb-grid--virtual")) {
+    if (cat === STICKERS_TAB) {
+      for (const btn of getVisibleThumbButtons()) {
+        const idx = Number(btn.dataset.index);
+        if (!Number.isFinite(idx)) continue;
+        btn.setAttribute(
+          "aria-selected",
+          isStickerSelectedInSubTab(activeStickerSubTab, idx) ? "true" : "false",
+        );
+      }
+      return;
+    }
+    scheduleRenderThumbs();
+    return;
+  }
+
+  const buttons = getVisibleThumbButtons();
+  if (!buttons.length) {
+    scheduleRenderThumbs();
+    return;
+  }
+
+  if (cat === STICKERS_TAB) {
+    buttons.forEach((btn, i) => {
+      btn.setAttribute(
+        "aria-selected",
+        isStickerSelectedInSubTab(activeStickerSubTab, i) ? "true" : "false",
+      );
+    });
+    return;
+  }
+
+  if (cat !== "background") {
+    const entries = getCategoryPickerEntries(cat);
+    if (buttons.length === entries.length) {
+      entries.forEach((entry, i) => {
+        const btn = buttons[i];
+        if (!btn) return;
+        btn.setAttribute("aria-selected", isCategoryEntrySelected(cat, entry) ? "true" : "false");
+      });
+      return;
+    }
+  }
+
+  buttons.forEach((btn) => {
+    const idx = Number(btn.dataset.index);
+    if (!Number.isFinite(idx)) return;
+    btn.setAttribute("aria-selected", selection[cat] === idx ? "true" : "false");
+  });
+}
+
+/** @returns {HTMLButtonElement[]} */
+function getVisibleThumbButtons() {
+  if (!thumbGrid) return [];
+  const windowEl = thumbGrid.querySelector(".thumb-grid-window");
+  if (windowEl) return [...windowEl.querySelectorAll("button.thumb")];
+  return [...thumbGrid.querySelectorAll(":scope > button.thumb")];
+}
+
 function renderThumbs() {
   if (!thumbGrid) return;
+  cancelAnimationFrame(thumbScrollRaf);
+  cancelAnimationFrame(thumbRenderScheduleRaf);
+  thumbRenderScheduleRaf = 0;
+  cancelThumbHydrateQueue();
+  thumbGrid.onscroll = null;
+  virtualThumbMount = null;
+  if (isMobilePickerDevice()) {
+    thumbPaintCache.clear();
+    if (thumbBoundsCache.size > 120) thumbBoundsCache.clear();
+  } else if (thumbPaintCache.size > maxThumbPaintCacheEntries()) {
+    thumbPaintCache.clear();
+  }
+  trimImageCacheForDevice();
   thumbRenderToken += 1;
   const token = thumbRenderToken;
+  const virtualThreshold = effectiveVirtualThreshold();
   syncBackgroundColorUi();
   syncStickerSearchUi();
 
@@ -2403,7 +2657,7 @@ function renderThumbs() {
     const source = activeStickerSubTab;
     const factory = (i) =>
       createStickerThumbButton(i, isStickerSelectedInSubTab(source, i), token);
-    if (count > VIRTUAL_THUMB_THRESHOLD) {
+    if (count > virtualThreshold) {
       mountVirtualThumbGrid(count, token, factory);
     } else {
       mountThumbGrid(count, token, factory);
@@ -2416,7 +2670,7 @@ function renderThumbs() {
     const entries = getCategoryPickerEntries(cat);
     const factory = (i) =>
       createCategoryThumbButton(cat, entries[i], isCategoryEntrySelected(cat, entries[i]), token);
-    if (entries.length > VIRTUAL_THUMB_THRESHOLD) {
+    if (entries.length > virtualThreshold) {
       mountVirtualThumbGrid(entries.length, token, factory);
     } else {
       mountThumbGrid(entries.length, token, factory);
@@ -2437,7 +2691,7 @@ function renderThumbs() {
       createCategoryThumbButton(cat, entries[i], isCategoryEntrySelected(cat, entries[i]), token);
   }
 
-  if (count > VIRTUAL_THUMB_THRESHOLD) {
+  if (count > virtualThreshold) {
     mountVirtualThumbGrid(count, token, factory);
   } else {
     mountThumbGrid(count, token, factory);
@@ -2717,7 +2971,7 @@ async function init() {
 
 window.addEventListener("resize", () => {
   if (!thumbGrid?.classList.contains("thumb-grid--virtual")) return;
-  renderThumbs();
+  scheduleRenderThumbs();
 });
 
 init();

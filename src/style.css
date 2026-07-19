@@ -883,6 +883,42 @@ body {
   pointer-events: none;
 }
 
+.thumb > .thumb-img,
+.thumb > .thumb-placeholder {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.thumb > .thumb-img {
+  object-fit: contain;
+  object-position: center center;
+}
+
+.thumb.thumb--collab-labeled > .thumb-img {
+  object-position: center bottom;
+}
+
+.thumb > .thumb-img.thumb-img--collab-clothes {
+  object-position: center bottom;
+  padding-bottom: 18%;
+  box-sizing: border-box;
+}
+
+.thumb > .thumb-placeholder {
+  display: block;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.06);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.1);
+}
+
+[data-theme="dark"] .thumb > .thumb-placeholder {
+  background: rgb(255 255 255 / 0.06);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1);
+}
+
 .thumb > .thumb-custom-bg-badge {
   z-index: 1;
 }
