@@ -73,8 +73,12 @@ const MOBILE_THUMB_RENDER_DEBOUNCE_MS = 200;
 const MOBILE_STICKER_TAB_DELAY_MS = 280;
 const THUMB_HYDRATE_MAX = 6;
 const THUMB_HYDRATE_MAX_MOBILE = 2;
-const PICKER_TAP_GUARD_MS = 120;
-const MOBILE_VIRTUAL_SCROLL_MS = 140;
+const PICKER_TAP_GUARD_MS = 180;
+const MOBILE_VIRTUAL_SCROLL_MS = 320;
+const MOBILE_THUMB_SRC_MAX = 1;
+const MOBILE_THUMB_SCROLL_SETTLE_MS = 200;
+/** On mobile, sticker grid is search-only above this count (avoids virtual-scroll OOM). */
+const MOBILE_STICKER_SEARCH_ONLY_MIN = 150;
 
 const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
 /** Mobile preview composites — thumb-sized decodes only (full-res stays in export cache). */
@@ -335,6 +339,71 @@ const thumbHydrateQueue = [];
 /** @type {IntersectionObserver | null} */
 let thumbImgObserver = null;
 let lastVirtualScrollAt = 0;
+let mobileThumbSrcActive = 0;
+/** @type {HTMLImageElement[]} */
+const mobileThumbSrcQueue = [];
+let thumbGridScrolling = false;
+let thumbGridScrollEndTimer = 0;
+let thumbGridScrollGateBound = false;
+/** @type {{ thumbs: number; remounts: number; previews: number; scrollPauses: number }} */
+const mobileDebugStats = { thumbs: 0, remounts: 0, previews: 0, scrollPauses: 0 };
+
+function mobileDebugEnabled() {
+  if (typeof window === "undefined") return false;
+  const q = new URLSearchParams(window.location.search);
+  return q.has("debug") || q.get("debug") === "mobile";
+}
+
+function cancelMobileThumbSrcQueue() {
+  mobileThumbSrcQueue.length = 0;
+}
+
+function assignMobileThumbSrc(/** @type {HTMLImageElement} */ img, src) {
+  if (!src || img.src === src) return;
+  img.dataset.pendingSrc = src;
+  if (!mobileThumbSrcQueue.includes(img)) mobileThumbSrcQueue.push(img);
+  if (mobileDebugEnabled()) mobileDebugStats.thumbs += 1;
+  if (!thumbGridScrolling) drainMobileThumbSrcQueue();
+}
+
+function drainMobileThumbSrcQueue() {
+  if (thumbGridScrolling || !isMobilePickerDevice()) return;
+  while (mobileThumbSrcActive < MOBILE_THUMB_SRC_MAX && mobileThumbSrcQueue.length > 0) {
+    const img = mobileThumbSrcQueue.shift();
+    if (!img?.isConnected) continue;
+    const src = img.dataset.pendingSrc || img.dataset.src;
+    if (!src || img.getAttribute("src") === src) continue;
+    mobileThumbSrcActive += 1;
+    const finish = () => {
+      mobileThumbSrcActive = Math.max(0, mobileThumbSrcActive - 1);
+      drainMobileThumbSrcQueue();
+    };
+    img.addEventListener("load", finish, { once: true });
+    img.addEventListener("error", finish, { once: true });
+    img.src = src;
+    delete img.dataset.src;
+    delete img.dataset.pendingSrc;
+    thumbImgObserver?.unobserve(img);
+  }
+}
+
+function bindThumbGridScrollGate() {
+  if (!thumbGrid || thumbGridScrollGateBound || !isMobilePickerDevice()) return;
+  thumbGridScrollGateBound = true;
+  thumbGrid.addEventListener(
+    "scroll",
+    () => {
+      thumbGridScrolling = true;
+      if (mobileDebugEnabled()) mobileDebugStats.scrollPauses += 1;
+      clearTimeout(thumbGridScrollEndTimer);
+      thumbGridScrollEndTimer = window.setTimeout(() => {
+        thumbGridScrolling = false;
+        drainMobileThumbSrcQueue();
+      }, MOBILE_THUMB_SCROLL_SETTLE_MS);
+    },
+    { passive: true },
+  );
+}
 
 /** @returns {boolean} */
 function isMobilePickerDevice() {
@@ -384,9 +453,12 @@ function resolvePreviewLayerUrl(cat, selIndex) {
 
 function releaseThumbGridImages() {
   if (!thumbGrid) return;
+  cancelMobileThumbSrcQueue();
   for (const img of thumbGrid.querySelectorAll("img.thumb-img")) {
     img.removeAttribute("src");
     img.src = "";
+    delete img.dataset.pendingSrc;
+    delete img.dataset.src;
   }
 }
 
@@ -497,11 +569,20 @@ function ensureThumbImgObserver() {
         const el = entry.target;
         if (!(el instanceof HTMLImageElement)) continue;
         const src = el.dataset.src;
-        if (src && el.getAttribute("src") !== src) el.src = src;
-        thumbImgObserver?.unobserve(el);
+        if (!src || el.getAttribute("src") === src) continue;
+        if (isMobilePickerDevice()) {
+          assignMobileThumbSrc(el, src);
+        } else {
+          el.src = src;
+          thumbImgObserver?.unobserve(el);
+        }
       }
     },
-    { root: thumbGrid, rootMargin: "80px 0px", threshold: 0.01 },
+    {
+      root: thumbGrid,
+      rootMargin: isMobilePickerDevice() ? "40px 0px" : "80px 0px",
+      threshold: 0.01,
+    },
   );
   return thumbImgObserver;
 }
@@ -538,7 +619,9 @@ function createLazyThumbImage(fullUrl, cat = null) {
       "error",
       () => {
         const fallback = img.dataset.fullSrc;
-        if (fallback && img.src !== fallback) img.src = fallback;
+        if (!fallback || img.src === fallback) return;
+        if (isMobilePickerDevice()) assignMobileThumbSrc(img, fallback);
+        else img.src = fallback;
       },
       { once: true },
     );
@@ -1162,16 +1245,18 @@ async function onCategoryEntryClick(cat, entry) {
   const locksChanged = enforceTraitLocks();
   syncSeed();
   if (locksChanged) {
-    scheduleRenderThumbs();
+    if (isMobilePickerDevice() && !thumbGrid?.classList.contains("thumb-grid--virtual")) {
+      updatePickerSelectionHighlight(cat);
+    } else {
+      scheduleRenderThumbs();
+    }
   } else {
     updatePickerSelectionHighlight(cat);
   }
-  if (prefetchUrl && isMobilePickerDevice()) {
-    await getCachedImage(previewCacheForDevice(), insertThumbPath(prefetchUrl)).catch(() => null);
-  } else if (prefetchUrl) {
+  if (prefetchUrl && !isMobilePickerDevice()) {
     await getCachedImage(imageCache, prefetchUrl).catch(() => null);
   }
-  await renderPreview(locksChanged ? null : cat);
+  void renderPreview(locksChanged ? null : cat);
 }
 
 /**
@@ -2008,7 +2093,7 @@ function applyTheme(mode) {
   themeSwitch.setAttribute("aria-label", isDark ? "Switch to light mode" : "Switch to dark mode");
   modeLightLabel?.classList.toggle("collection-name--active", !isDark);
   modeDarkLabel?.classList.toggle("collection-name--active", isDark);
-  renderThumbs();
+  scheduleRenderThumbs();
   syncBackgroundColorUi();
   requestAnimationFrame(() => syncPickerHeightToPreview());
 }
@@ -2156,6 +2241,7 @@ async function renderPreview(focusCat = null) {
 async function renderPreviewNow(focusCat = null) {
   previewRenderToken += 1;
   const token = previewRenderToken;
+  if (mobileDebugEnabled()) mobileDebugStats.previews += 1;
 
   if (useMobileDomPreview()) {
     syncMobileDomPreview(selection, focusCat);
@@ -2694,22 +2780,20 @@ async function onTraitThumbClick(cat, index) {
   const locksChanged = enforceTraitLocks();
   syncSeed();
   if (locksChanged) {
-    scheduleRenderThumbs();
+    if (isMobilePickerDevice() && !thumbGrid?.classList.contains("thumb-grid--virtual")) {
+      updatePickerSelectionHighlight(cat);
+    } else {
+      scheduleRenderThumbs();
+    }
   } else {
     updatePickerSelectionHighlight(cat);
   }
   if (cat === "background" && isCustomBackgroundIndex(index)) {
     backgroundColorInput?.click();
-    await renderPreview("background");
+    void renderPreview("background");
     return;
   }
-  const url = resolveLayerUrl(cat, index);
-  if (url && isMobilePickerDevice()) {
-    await getCachedImage(previewCacheForDevice(), insertThumbPath(url)).catch(() => null);
-  } else if (url) {
-    await getCachedImage(imageCache, url).catch(() => null);
-  }
-  await renderPreview(cat);
+  void renderPreview(locksChanged ? null : cat);
 }
 
 /**
@@ -2842,6 +2926,42 @@ async function applyStickerSearch() {
 /**
  * @param {number} count
  * @param {number} token
+ */
+function mountMobileStickerSearchPanel(count, token) {
+  if (!thumbGrid) return;
+  virtualThumbMount = null;
+  thumbGrid.classList.remove("thumb-grid--virtual");
+  thumbGrid.onscroll = null;
+  thumbGrid.onscrollend = null;
+  releaseThumbGridImages();
+  thumbGrid.innerHTML = "";
+
+  const hint = document.createElement("p");
+  hint.className = "mobile-sticker-hint";
+  hint.textContent =
+    "Pilih sticker lewat ID di atas. Daftar penuh dinonaktifkan di mobile agar Safari tidak kehabisan memori.";
+  thumbGrid.appendChild(hint);
+
+  const source = activeStickerSubTab;
+  if (stickerOverlay.index > 0 && stickerOverlay.source === source) {
+    const label = document.createElement("p");
+    label.className = "mobile-sticker-hint mobile-sticker-hint--sub";
+    label.textContent = "Sticker aktif:";
+    thumbGrid.appendChild(label);
+    thumbGrid.appendChild(
+      createStickerThumbButton(stickerOverlay.index, true, token),
+    );
+  } else if (count > 1) {
+    const sub = document.createElement("p");
+    sub.className = "mobile-sticker-hint mobile-sticker-hint--sub";
+    sub.textContent = `${count - 1} stickers · ketik ID lalu tap cari`;
+    thumbGrid.appendChild(sub);
+  }
+}
+
+/**
+ * @param {number} count
+ * @param {number} token
  * @param {(index: number) => HTMLButtonElement} factory
  */
 function mountThumbGrid(count, token, factory) {
@@ -2851,6 +2971,7 @@ function mountThumbGrid(count, token, factory) {
   thumbGrid.onscroll = null;
   /** @type {((this: HTMLElement, ev: Event) => void) | null} */
   thumbGrid.onscrollend = null;
+  releaseThumbGridImages();
   thumbGrid.innerHTML = "";
 
   for (let i = 0; i < count; i++) {
@@ -2887,6 +3008,8 @@ function mountVirtualThumbGrid(count, token, factory) {
   virtualThumbMount = { token, count, cols, startRow, endRow };
 
   const savedScrollTop = scrollTop;
+  releaseThumbGridImages();
+  if (mobileDebugEnabled()) mobileDebugStats.remounts += 1;
   thumbGrid.classList.add("thumb-grid--virtual");
   thumbGrid.innerHTML = "";
 
@@ -3116,6 +3239,7 @@ function getVisibleThumbButtons() {
 
 function renderThumbs() {
   if (!thumbGrid) return;
+  bindThumbGridScrollGate();
   cancelAnimationFrame(thumbScrollRaf);
   cancelAnimationFrame(thumbRenderScheduleRaf);
   thumbRenderScheduleRaf = 0;
@@ -3142,6 +3266,10 @@ function renderThumbs() {
   if (activeTab === STICKERS_TAB) {
     const count = getStickerCount();
     const source = activeStickerSubTab;
+    if (isMobilePickerDevice() && count > MOBILE_STICKER_SEARCH_ONLY_MIN) {
+      mountMobileStickerSearchPanel(count, token);
+      return;
+    }
     const factory = (i) =>
       createStickerThumbButton(i, isStickerSelectedInSubTab(source, i), token);
     if (count > virtualThreshold) {
@@ -3470,13 +3598,22 @@ async function init() {
   renderTabs();
   renderThumbs();
   await renderPreview();
-  if (new URLSearchParams(location.search).has("debug")) {
+  if (mobileDebugEnabled()) {
     window.__dripLabDebug = () => ({
       previewCache: previewImageCache.map.size,
       imageCache: imageCache.map.size,
       activeTab,
       virtual: virtualThumbMount,
       previewPx: previewPixelSize(),
+      domPreview: useMobileDomPreview(),
+      thumbQueue: mobileThumbSrcQueue.length,
+      thumbLoadsActive: mobileThumbSrcActive,
+      thumbGridScrolling,
+      stats: { ...mobileDebugStats },
+      domThumbImgs: thumbGrid?.querySelectorAll("img.thumb-img[src]").length ?? 0,
+      previewLayerSrcs: previewDomEl
+        ? [...previewDomEl.querySelectorAll("img.preview-layer")].filter((i) => i.src).length
+        : 0,
     });
   }
   requestAnimationFrame(() => {

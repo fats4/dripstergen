@@ -802,6 +802,25 @@ body {
   pointer-events: none;
 }
 
+.mobile-sticker-hint {
+  margin: 0.75rem 0.35rem 0.35rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--muted);
+  grid-column: 1 / -1;
+}
+
+.mobile-sticker-hint--sub {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+}
+
+.thumb-grid .mobile-sticker-hint + .thumb {
+  grid-column: 1 / -1;
+  justify-self: center;
+  width: min(100%, 8rem);
+}
+
 .thumb.thumb--loading {
   background: linear-gradient(
     110deg,
