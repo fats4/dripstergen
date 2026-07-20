@@ -12,7 +12,7 @@ import {
   stickerThumbUrl,
   insertThumbPath,
 } from "./assets.js";
-import { getCachedImage, LruImageCache } from "./image-cache.js";
+import { getCachedImage, LruImageCache, loadImageElement } from "./image-cache.js";
 import { exportCorsSetupMessage, loadExportTraitImage } from "./traits-export.js";
 import {
   CATEGORY_KEYS,
@@ -446,8 +446,13 @@ function isMobilePickerDevice() {
   );
 }
 
-function useMobileDomPreview() {
+/** Mobile Safari: text-only picker + sequential canvas preview (no decoded thumb grid). */
+function useMobileLitePicker() {
   return isMobilePickerDevice();
+}
+
+function useMobileDomPreview() {
+  return false;
 }
 
 /** @returns {number} Preview canvas backing store (export stays at PREVIEW). */
@@ -456,18 +461,13 @@ function previewPixelSize() {
 }
 
 function syncPreviewCanvasBackingStore() {
-  if (useMobileDomPreview()) {
-    if (previewCanvas.width !== 1) {
-      previewCanvas.width = 1;
-      previewCanvas.height = 1;
-    }
-    return;
-  }
   const px = previewPixelSize();
   if (previewCanvas.width !== px) {
     previewCanvas.width = px;
     previewCanvas.height = px;
   }
+  if (previewDomEl) previewDomEl.hidden = true;
+  previewCanvas.hidden = false;
 }
 
 /** @returns {LruImageCache} */
@@ -530,7 +530,7 @@ async function cachePreviewLayer(cache, fullUrl) {
 
 /** Mobile uses lazy <img> thumbs — avoids hundreds of large canvases (Safari OOM). */
 function useSimpleMobileThumbs() {
-  return isMobilePickerDevice();
+  return false;
 }
 
 /** @returns {number} */
@@ -2221,6 +2221,85 @@ function drawComposite(
 }
 
 /**
+ * Mobile: decode one layer at a time, draw to canvas, do not retain Image objects in cache.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Selection} sel
+ * @param {number} [token]
+ */
+async function drawCompositeMobileLite(ctx, sel, token = previewRenderToken) {
+  const px = previewPixelSize();
+  ctx.clearRect(0, 0, px, px);
+
+  const hasCustomBg = isCustomBackgroundIndex(sel.background);
+  const hasImageBg = sel.background > 0 && sel.background <= traitCatalog.background.length;
+
+  if (!hasCustomBg && !hasImageBg && traitCatalog.background.length === 0) {
+    const grad = ctx.createLinearGradient(0, 0, px, px);
+    grad.addColorStop(0, "#e0e7ff");
+    grad.addColorStop(1, "#f5d0fe");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, px, px);
+  }
+
+  for (const key of COMPOSITE_ORDER) {
+    if (token !== previewRenderToken) return;
+    if (key === "background" && hasCustomBg) {
+      ctx.fillStyle = customBackgroundColor;
+      ctx.fillRect(0, 0, px, px);
+      continue;
+    }
+    const full = resolveLayerUrl(key, sel[key]);
+    if (!full) continue;
+    const thumb = categoryThumbUrl(key, full);
+    let img;
+    try {
+      img = await loadImageElement(thumb);
+    } catch {
+      try {
+        img = await loadImageElement(full);
+      } catch {
+        continue;
+      }
+    }
+    if (token !== previewRenderToken) return;
+    ctx.drawImage(img, 0, 0, px, px);
+  }
+
+  if (token !== previewRenderToken) return;
+  activeStickerImage = null;
+  if (stickerOverlay.index > 0) {
+    const full = activeStickerFullUrl();
+    if (full) {
+      try {
+        activeStickerImage = await loadImageElement(stickerThumbUrl(full));
+      } catch {
+        try {
+          activeStickerImage = await loadImageElement(full);
+        } catch {
+          activeStickerImage = null;
+        }
+      }
+    }
+  }
+  if (activeStickerImage?.naturalWidth) {
+    drawStickerOverlay(ctx, stickerOverlay, activeStickerImage);
+  }
+}
+
+/**
+ * @param {string} fullUrl
+ * @returns {HTMLSpanElement}
+ */
+function createMobileLiteThumbLabel(fullUrl) {
+  const el = document.createElement("span");
+  el.className = "thumb-lite-label";
+  const base = urlBasename(fullUrl).replace(/\.[^.]+$/i, "");
+  el.textContent = base.length > 11 ? `${base.slice(0, 10)}…` : base;
+  el.title = base;
+  return el;
+}
+
+/**
  * @param {Selection} sel
  * @param {LruImageCache} cache
  * @returns {{ expected: number; loaded: number }}
@@ -2296,7 +2375,7 @@ async function renderPreview(focusCat = null) {
       previewDebounceTimer = window.setTimeout(() => {
         previewDebounceTimer = 0;
         void renderPreviewNow(focusCat).then(resolve);
-      }, 72);
+      }, 140);
     });
   }
   return renderPreviewNow(focusCat);
@@ -2309,6 +2388,13 @@ async function renderPreviewNow(focusCat = null) {
   previewRenderToken += 1;
   const token = previewRenderToken;
   if (mobileDebugEnabled()) mobileDebugStats.previews += 1;
+
+  if (useMobileLitePicker()) {
+    await drawCompositeMobileLite(previewCtx, selection, token);
+    if (token !== previewRenderToken) return;
+    syncStickerOverlayUi();
+    return;
+  }
 
   if (useMobileDomPreview()) {
     syncMobileDomPreview(selection, focusCat);
@@ -2788,7 +2874,7 @@ function createTraitThumbButton(cat, index, selected, token) {
     btn.setAttribute("aria-label", "None");
   }
 
-  if (useSimpleMobileThumbs()) {
+  if (useMobileLitePicker()) {
     if (index === 0) {
       btn.appendChild(createEmptyThumbPlaceholder());
     } else if (cat === "background" && isCustomBackgroundIndex(index)) {
@@ -2798,7 +2884,7 @@ function createTraitThumbButton(cat, index, selected, token) {
       btn.appendChild(swatch);
     } else if (index > 0) {
       const fullUrl = traitFullUrl(cat, index);
-      if (fullUrl) btn.appendChild(createLazyThumbImage(fullUrl, cat));
+      if (fullUrl) btn.appendChild(createMobileLiteThumbLabel(fullUrl));
     }
   } else {
     const canvas = createThumbCanvas();
@@ -2883,10 +2969,8 @@ function createCollabThumbButton(entry, selected, token) {
   brand.textContent = meta?.label ?? entry.collabId;
   if (meta?.accent) btn.style.setProperty("--collab-accent", meta.accent);
 
-  if (useSimpleMobileThumbs()) {
-    const img = createLazyThumbImage(entry.url, entry.category);
-    if (entry.category === "clothes") img.classList.add("thumb-img--collab-clothes");
-    btn.appendChild(img);
+  if (useMobileLitePicker()) {
+    btn.appendChild(createMobileLiteThumbLabel(entry.url));
     btn.appendChild(brand);
   } else {
     const canvas = createThumbCanvas();
@@ -2921,12 +3005,12 @@ function createStickerThumbButton(index, selected, token) {
   btn.setAttribute("aria-selected", selected ? "true" : "false");
   btn.dataset.index = String(index);
 
-  if (useSimpleMobileThumbs()) {
+  if (useMobileLitePicker()) {
     if (index === 0) {
       btn.appendChild(createEmptyThumbPlaceholder());
     } else {
       const fullUrl = stickerFullUrl(activeStickerSubTab, index);
-      if (fullUrl) btn.appendChild(createLazyThumbImage(fullUrl, STICKERS_TAB));
+      if (fullUrl) btn.appendChild(createMobileLiteThumbLabel(fullUrl));
     }
   } else {
     const canvas = createThumbCanvas();
@@ -3665,7 +3749,9 @@ async function init() {
   syncSeed();
   applyTheme(getInitialTheme());
   syncPreviewCanvasBackingStore();
-  ensureMobilePreviewDom();
+  if (useMobileLitePicker()) {
+    document.documentElement.dataset.mobileLite = "true";
+  }
   renderTabs();
   renderThumbs();
   await renderPreview();
@@ -3677,6 +3763,7 @@ async function init() {
       virtual: virtualThumbMount,
       previewPx: previewPixelSize(),
       domPreview: useMobileDomPreview(),
+      mobileLite: useMobileLitePicker(),
       thumbQueue: mobileThumbSrcQueue.length,
       thumbLoadsActive: mobileThumbSrcActive,
       thumbGridScrolling,

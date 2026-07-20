@@ -951,6 +951,25 @@ body {
   border-radius: 4px;
 }
 
+.thumb-lite-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.2rem;
+  font-size: 0.58rem;
+  line-height: 1.15;
+  text-align: center;
+  word-break: break-word;
+  color: var(--text);
+  pointer-events: none;
+}
+
+[data-mobile-lite="true"] .thumb-grid {
+  contain: strict;
+}
+
 .preview-wrap {
   border: none;
   border-radius: 0;
