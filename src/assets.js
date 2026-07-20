@@ -146,21 +146,6 @@ export function stickerThumbUrl(fullUrl) {
 }
 
 /**
- * Insert `thumbs/` before filename (works for regular + collab trait paths).
- * @param {string} fullUrl
- * @returns {string}
- */
-export function insertThumbPath(fullUrl) {
-  if (!fullUrl || fullUrl.includes("/thumbs/")) return fullUrl;
-  const q = fullUrl.indexOf("?");
-  const base = q === -1 ? fullUrl : fullUrl.slice(0, q);
-  const query = q === -1 ? "" : fullUrl.slice(q);
-  const lastSlash = base.lastIndexOf("/");
-  if (lastSlash === -1) return fullUrl;
-  return `${base.slice(0, lastSlash + 1)}thumbs/${base.slice(lastSlash + 1)}${query}`;
-}
-
-/**
  * Cross-origin images need CORS on the asset host for canvas export (Download PNG).
  * @param {string} url
  * @returns {boolean}
