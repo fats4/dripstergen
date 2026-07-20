@@ -465,35 +465,62 @@ function stripMobileHeavyPageAssets() {
 }
 
 /**
- * Draw a layer at most `px`×`px` decode size (Safari decodes full PNG/WebP otherwise → OOM).
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {string} fullUrl
+ * @param {CategoryKey} cat
+ * @param {number} px
+ * @param {number} token
+ */
+async function drawMobileLayerToCanvas(ctx, fullUrl, cat, px, token) {
+  if (token !== previewRenderToken || !fullUrl) return false;
+  const thumb = categoryThumbUrl(cat, fullUrl);
+  const candidates = thumb !== fullUrl ? [thumb, fullUrl] : [fullUrl];
+  for (const url of candidates) {
+    if (await drawMobileLayerFromUrl(ctx, url, px, token)) return true;
+  }
+  return false;
+}
+
+/**
  * @param {CanvasRenderingContext2D} ctx
  * @param {string} url
  * @param {number} px
  * @param {number} token
  */
-async function drawMobileLayerToCanvas(ctx, url, px, token) {
-  if (token !== previewRenderToken || !url) return false;
+async function drawMobileLayerFromUrl(ctx, url, px, token) {
+  if (token !== previewRenderToken) return false;
   try {
     const res = await fetch(url, { mode: "cors", credentials: "omit" });
     if (!res.ok) return false;
     const blob = await res.blob();
     if (token !== previewRenderToken) return false;
     if (typeof createImageBitmap === "function") {
-      const bitmap = await createImageBitmap(blob, {
-        resizeWidth: px,
-        resizeHeight: px,
-        resizeQuality: "medium",
-      });
-      if (token !== previewRenderToken) {
+      try {
+        const bitmap = await createImageBitmap(blob, {
+          resizeWidth: px,
+          resizeHeight: px,
+          resizeQuality: "medium",
+        });
+        if (token !== previewRenderToken) {
+          bitmap.close();
+          return false;
+        }
+        ctx.drawImage(bitmap, 0, 0, px, px);
         bitmap.close();
-        return false;
+        return true;
+      } catch {
+        const bitmap = await createImageBitmap(blob);
+        if (token !== previewRenderToken) {
+          bitmap.close();
+          return false;
+        }
+        ctx.drawImage(bitmap, 0, 0, px, px);
+        bitmap.close();
+        return true;
       }
-      ctx.drawImage(bitmap, 0, 0, px, px);
-      bitmap.close();
-      return true;
     }
   } catch {
-    /* fall through */
+    /* fetch/bitmap failed — try Image */
   }
   try {
     const img = await loadImageElement(url);
@@ -689,6 +716,7 @@ function ensureThumbImgObserver() {
  */
 function resolvePickerThumbUrl(cat, fullUrl) {
   if (!fullUrl || !useSimpleMobileThumbs()) return fullUrl;
+  if (useMobileLitePicker()) return fullUrl;
   if (cat === STICKERS_TAB) return stickerThumbUrl(fullUrl);
   if (cat) return categoryThumbUrl(cat, fullUrl);
   return fullUrl;
@@ -2311,8 +2339,7 @@ async function drawCompositeMobileLite(ctx, sel, token = previewRenderToken) {
     }
     const full = resolveLayerUrl(key, sel[key]);
     if (!full) continue;
-    const thumb = categoryThumbUrl(key, full);
-    await drawMobileLayerToCanvas(ctx, thumb, px, token);
+    await drawMobileLayerToCanvas(ctx, full, key, px, token);
   }
 
   if (token !== previewRenderToken) return;
@@ -2324,7 +2351,11 @@ async function drawCompositeMobileLite(ctx, sel, token = previewRenderToken) {
       try {
         activeStickerImage = await loadImageElement(thumb);
       } catch {
-        activeStickerImage = null;
+        try {
+          activeStickerImage = await loadImageElement(full);
+        } catch {
+          activeStickerImage = null;
+        }
       }
     }
   }
