@@ -3115,7 +3115,9 @@ async function applyStickerSearch() {
 
   setStickerSearchFeedback("");
   stickerOverlay = { ...stickerOverlay, source: activeStickerSubTab, index };
-  await refreshActiveStickerImage();
+  if (!useMobileLitePicker()) {
+    await refreshActiveStickerImage();
+  }
   persistStickerOverlay();
   syncStickerOverlayUi();
   stickerSearchInput.value = stickerIdFromPickerIndex(activeStickerSubTab, index);
