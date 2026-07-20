@@ -3,6 +3,39 @@ import { assetNeedsCrossOrigin } from "./assets.js";
 /** @type {Map<string, Promise<HTMLImageElement>>} */
 const inFlight = new Map();
 
+let loadSlots = 0;
+/** @type {Array<() => void>} */
+const loadWaitQueue = [];
+
+/** @returns {number} */
+function maxParallelImageLoads() {
+  if (typeof window === "undefined") return 8;
+  if (window.innerWidth < 768) return 3;
+  if (window.matchMedia("(pointer: coarse)").matches) return 3;
+  return 8;
+}
+
+/** @returns {Promise<void>} */
+function acquireLoadSlot() {
+  const max = maxParallelImageLoads();
+  if (loadSlots < max) {
+    loadSlots += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    loadWaitQueue.push(() => {
+      loadSlots += 1;
+      resolve();
+    });
+  });
+}
+
+function releaseLoadSlot() {
+  loadSlots = Math.max(0, loadSlots - 1);
+  const next = loadWaitQueue.shift();
+  if (next) next();
+}
+
 /**
  * @param {string} url
  * @param {boolean} [useCors]
@@ -86,16 +119,17 @@ export async function getCachedImage(cache, url) {
   const pending = inFlight.get(url);
   if (pending) return pending;
 
-  const promise = loadImageElement(url)
-    .then((img) => {
+  const promise = (async () => {
+    await acquireLoadSlot();
+    try {
+      const img = await loadImageElement(url);
       cache.set(url, img);
-      inFlight.delete(url);
       return img;
-    })
-    .catch((err) => {
+    } finally {
       inFlight.delete(url);
-      throw err;
-    });
+      releaseLoadSlot();
+    }
+  })();
 
   inFlight.set(url, promise);
   return promise;
