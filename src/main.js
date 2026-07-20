@@ -68,7 +68,9 @@ const THUMB_PAINT_CACHE_MAX_MOBILE = 0;
 /** Above this count, thumb grid uses virtual scroll (for 3000+ assets) */
 const VIRTUAL_THUMB_THRESHOLD = 60;
 /** Mobile: virtual scroll only for huge sticker lists; skin/clothes use a simple lazy grid */
-const VIRTUAL_THUMB_THRESHOLD_MOBILE = 100;
+const VIRTUAL_THUMB_THRESHOLD_MOBILE = 120;
+const MOBILE_THUMB_RENDER_DEBOUNCE_MS = 200;
+const MOBILE_STICKER_TAB_DELAY_MS = 280;
 const THUMB_HYDRATE_MAX = 6;
 const THUMB_HYDRATE_MAX_MOBILE = 2;
 const PICKER_TAP_GUARD_MS = 120;
@@ -104,6 +106,7 @@ app.innerHTML = `
       <div class="preview-stack">
         <div class="preview-wrap" id="previewWrap">
           <canvas id="preview" width="${PREVIEW}" height="${PREVIEW}"></canvas>
+          <div class="preview-dom" id="previewDom" hidden></div>
           <p class="custom-overlay-hint" id="customOverlayHint" hidden>
             Drag to move · Shift+scroll to rotate
           </p>
@@ -342,6 +345,10 @@ function isMobilePickerDevice() {
   );
 }
 
+function useMobileDomPreview() {
+  return isMobilePickerDevice();
+}
+
 /** @returns {number} Preview canvas backing store (export stays at PREVIEW). */
 function previewPixelSize() {
   return isMobilePickerDevice() ? PREVIEW_MOBILE : PREVIEW;
@@ -525,16 +532,17 @@ function createLazyThumbImage(fullUrl, cat = null) {
   if (useSimpleMobileThumbs()) {
     img.loading = "lazy";
     img.fetchPriority = "low";
-    img.src = displayUrl;
-    if (displayUrl !== fullUrl) {
-      img.addEventListener(
-        "error",
-        () => {
-          if (fullUrl && img.src !== fullUrl) img.src = fullUrl;
-        },
-        { once: true },
-      );
-    }
+    img.dataset.src = displayUrl;
+    if (displayUrl !== fullUrl) img.dataset.fullSrc = fullUrl;
+    img.addEventListener(
+      "error",
+      () => {
+        const fallback = img.dataset.fullSrc;
+        if (fallback && img.src !== fallback) img.src = fallback;
+      },
+      { once: true },
+    );
+    ensureThumbImgObserver()?.observe(img);
   } else {
     img.loading = "lazy";
     img.src = displayUrl;
@@ -546,9 +554,28 @@ function releaseMobilePickerMemory() {
   if (!isMobilePickerDevice()) return;
   thumbPaintCache.clear();
   if (thumbBoundsCache.size > 48) thumbBoundsCache.clear();
+  previewImageCache.map.clear();
 }
 
-function scheduleRenderThumbs() {
+let thumbRenderDebounceTimer = 0;
+let stickerTabRenderTimer = 0;
+
+function schedulePickerAfterTabChange(tabKey) {
+  if (isMobilePickerDevice()) {
+    previewImageCache.map.clear();
+    if (tabKey === STICKERS_TAB) {
+      clearTimeout(stickerTabRenderTimer);
+      stickerTabRenderTimer = window.setTimeout(() => {
+        stickerTabRenderTimer = 0;
+        scheduleRenderThumbsNow();
+      }, MOBILE_STICKER_TAB_DELAY_MS);
+      return;
+    }
+  }
+  scheduleRenderThumbs();
+}
+
+function scheduleRenderThumbsNow() {
   cancelAnimationFrame(thumbRenderScheduleRaf);
   const run = () => {
     thumbRenderScheduleRaf = 0;
@@ -561,6 +588,18 @@ function scheduleRenderThumbs() {
     return;
   }
   thumbRenderScheduleRaf = requestAnimationFrame(run);
+}
+
+function scheduleRenderThumbs() {
+  if (isMobilePickerDevice()) {
+    clearTimeout(thumbRenderDebounceTimer);
+    thumbRenderDebounceTimer = window.setTimeout(() => {
+      thumbRenderDebounceTimer = 0;
+      scheduleRenderThumbsNow();
+    }, MOBILE_THUMB_RENDER_DEBOUNCE_MS);
+    return;
+  }
+  scheduleRenderThumbsNow();
 }
 
 /** @type {{ token: number; count: number; cols: number; startRow: number; endRow: number } | null} */
@@ -1444,8 +1483,153 @@ let stickerDragging = false;
 
 const previewCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById("preview"));
 const previewWrap = document.getElementById("previewWrap");
+const previewDomEl = document.getElementById("previewDom");
 const previewCtx = previewCanvas.getContext("2d");
 if (!previewCtx) throw new Error("2d context");
+
+/** @type {Partial<Record<CategoryKey, HTMLImageElement>>} */
+const previewLayerImgs = {};
+/** @type {HTMLImageElement | null} */
+let previewStickerImgEl = null;
+let mobilePreviewDomReady = false;
+
+function ensureMobilePreviewDom() {
+  if (!useMobileDomPreview() || !previewDomEl) return;
+  if (mobilePreviewDomReady) return;
+  mobilePreviewDomReady = true;
+  previewCanvas.hidden = true;
+  previewDomEl.hidden = false;
+  previewDomEl.setAttribute("aria-hidden", "false");
+
+  for (const key of COMPOSITE_ORDER) {
+    const img = document.createElement("img");
+    img.className = `preview-layer preview-layer--${key}`;
+    img.alt = "";
+    img.decoding = "async";
+    img.loading = "lazy";
+    img.fetchPriority = "low";
+    previewLayerImgs[key] = img;
+    previewDomEl.appendChild(img);
+  }
+  previewStickerImgEl = document.createElement("img");
+  previewStickerImgEl.className = "preview-layer preview-layer--sticker";
+  previewStickerImgEl.alt = "";
+  previewStickerImgEl.decoding = "async";
+  previewDomEl.appendChild(previewStickerImgEl);
+}
+
+/**
+ * @param {string} fullUrl
+ * @returns {string}
+ */
+function previewThumbDisplayUrl(fullUrl) {
+  return insertThumbPath(fullUrl);
+}
+
+/**
+ * @param {HTMLImageElement} img
+ * @param {string | null} fullUrl
+ */
+function setPreviewLayerImgSrc(img, fullUrl) {
+  if (!fullUrl) {
+    img.hidden = true;
+    img.removeAttribute("src");
+    delete img.dataset.full;
+    return;
+  }
+  if (img.dataset.full === fullUrl && img.getAttribute("src")) {
+    img.hidden = false;
+    return;
+  }
+  img.dataset.full = fullUrl;
+  const thumb = previewThumbDisplayUrl(fullUrl);
+  img.hidden = false;
+  img.onerror = () => {
+    if (fullUrl && img.src !== fullUrl) img.src = fullUrl;
+  };
+  img.src = thumb;
+}
+
+/**
+ * @param {Selection} sel
+ * @param {CategoryKey | null} [focusCat]
+ */
+function syncMobileDomPreview(sel, focusCat = null) {
+  ensureMobilePreviewDom();
+  if (!previewDomEl) return;
+
+  /** @type {CategoryKey[]} */
+  const keys = focusCat ? [focusCat] : [...COMPOSITE_ORDER];
+
+  if (!focusCat) {
+    previewDomEl.style.backgroundColor = isCustomBackgroundIndex(sel.background)
+      ? customBackgroundColor
+      : "";
+  }
+
+  for (const key of keys) {
+    const img = previewLayerImgs[key];
+    if (!img) continue;
+
+    if (key === "background" && isCustomBackgroundIndex(sel.background)) {
+      img.hidden = true;
+      img.removeAttribute("src");
+      delete img.dataset.full;
+      if (focusCat === "background" || !focusCat) {
+        previewDomEl.style.backgroundColor = customBackgroundColor;
+      }
+      continue;
+    }
+
+    if (key === "background" && (focusCat === "background" || !focusCat)) {
+      previewDomEl.style.backgroundColor = "";
+    }
+
+    const full = resolveLayerUrl(key, sel[key]);
+    setPreviewLayerImgSrc(img, full);
+  }
+}
+
+function applyMobileStickerDomTransform() {
+  if (!previewStickerImgEl) return;
+  const o = stickerOverlay;
+  if (o.index <= 0) {
+    previewStickerImgEl.hidden = true;
+    previewStickerImgEl.removeAttribute("src");
+    activeStickerImage = null;
+    return;
+  }
+  const full = activeStickerFullUrl();
+  if (!full) {
+    previewStickerImgEl.hidden = true;
+    return;
+  }
+  if (previewStickerImgEl.dataset.full !== full) {
+    previewStickerImgEl.dataset.full = full;
+    const thumb = stickerThumbUrl(full);
+    previewStickerImgEl.onerror = () => {
+      if (full && previewStickerImgEl.src !== full) previewStickerImgEl.src = full;
+    };
+    previewStickerImgEl.src = thumb;
+  }
+  previewStickerImgEl.hidden = false;
+  const wPct = Math.max(8, Math.min(100, o.scale * 100));
+  previewStickerImgEl.style.width = `${wPct}%`;
+  previewStickerImgEl.style.height = "auto";
+  previewStickerImgEl.style.left = `${o.x * 100}%`;
+  previewStickerImgEl.style.top = `${o.y * 100}%`;
+  previewStickerImgEl.style.transform = `translate(-50%, -50%) rotate(${o.rotation}deg)`;
+  if (previewStickerImgEl.complete && previewStickerImgEl.naturalWidth) {
+    activeStickerImage = previewStickerImgEl;
+  }
+}
+
+function getPreviewHitRect() {
+  if (useMobileDomPreview() && previewDomEl && !previewDomEl.hidden) {
+    return previewDomEl.getBoundingClientRect();
+  }
+  return previewCanvas.getBoundingClientRect();
+}
 
 const tabsEl = document.getElementById("tabs");
 const stickerSubTabsEl = document.getElementById("stickerSubTabs");
@@ -1504,11 +1688,21 @@ function applyActiveStickerImage() {
     activeStickerImage = null;
     return;
   }
+  if (useMobileDomPreview() && previewStickerImgEl?.dataset.full === full && previewStickerImgEl.naturalWidth) {
+    activeStickerImage = previewStickerImgEl;
+    return;
+  }
   activeStickerImage = previewCacheForDevice().get(full) ?? null;
 }
 
 function syncStickerOverlayUi() {
-  const hasSticker = stickerOverlay.index > 0 && Boolean(activeStickerImage?.naturalWidth);
+  const hasSticker =
+    stickerOverlay.index > 0 &&
+    Boolean(
+      useMobileDomPreview()
+        ? previewStickerImgEl?.naturalWidth
+        : activeStickerImage?.naturalWidth,
+    );
   const onStickerTab = activeTab === STICKERS_TAB;
   stickerControls?.toggleAttribute("hidden", !(hasSticker && onStickerTab));
   customOverlayHint?.toggleAttribute("hidden", !hasSticker);
@@ -1564,7 +1758,7 @@ function drawStickerOverlay(ctx, o, stickerImg = activeStickerImage) {
  * @returns {{ x: number; y: number }}
  */
 function normalizedPointFromPointer(e) {
-  const rect = previewCanvas.getBoundingClientRect();
+  const rect = getPreviewHitRect();
   const x = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0.5;
   const y = rect.height > 0 ? (e.clientY - rect.top) / rect.height : 0.5;
   return {
@@ -1962,6 +2156,27 @@ async function renderPreview(focusCat = null) {
 async function renderPreviewNow(focusCat = null) {
   previewRenderToken += 1;
   const token = previewRenderToken;
+
+  if (useMobileDomPreview()) {
+    syncMobileDomPreview(selection, focusCat);
+    if (stickerOverlay.index > 0) {
+      applyMobileStickerDomTransform();
+      if (previewStickerImgEl && !previewStickerImgEl.complete) {
+        await new Promise((resolve) => {
+          const done = () => resolve(undefined);
+          previewStickerImgEl?.addEventListener("load", done, { once: true });
+          previewStickerImgEl?.addEventListener("error", done, { once: true });
+        });
+      }
+      if (token !== previewRenderToken) return;
+      if (previewStickerImgEl?.naturalWidth) activeStickerImage = previewStickerImgEl;
+    } else {
+      applyMobileStickerDomTransform();
+    }
+    syncStickerOverlayUi();
+    return;
+  }
+
   await prefetchSelectionLayers(selection, token, focusCat);
   if (token !== previewRenderToken) return;
   if (stickerOverlay.index > 0) {
@@ -2805,7 +3020,7 @@ function renderTabs() {
       syncBackgroundColorUi();
       syncStickerSearchUi();
       syncStickerOverlayUi();
-      scheduleRenderThumbs();
+      schedulePickerAfterTabChange(key);
     });
     tabsEl.appendChild(btn);
   }
@@ -3096,7 +3311,12 @@ stickerRotation?.addEventListener("input", () => {
   void renderPreview();
 });
 
-previewCanvas.addEventListener("wheel", (e) => {
+function previewPointerCaptureEl() {
+  return useMobileDomPreview() && previewDomEl && !previewDomEl.hidden ? previewDomEl : previewCanvas;
+}
+
+/** @param {WheelEvent} e */
+function onPreviewWheel(e) {
   if (stickerOverlay.index <= 0 || !activeStickerImage) return;
   if (!e.shiftKey) return;
   e.preventDefault();
@@ -3108,39 +3328,51 @@ previewCanvas.addEventListener("wheel", (e) => {
   persistStickerOverlay();
   syncStickerOverlayUi();
   void renderPreview();
-}, { passive: false });
+}
 
-previewCanvas.addEventListener("pointerdown", (e) => {
-  if (stickerOverlay.index <= 0 || !activeStickerImage) return;
+/** @param {PointerEvent} e */
+function onPreviewPointerDown(e) {
+  if (stickerOverlay.index <= 0) return;
+  if (!useMobileDomPreview() && !activeStickerImage) return;
   if (e.shiftKey) return;
   stickerDragging = true;
-  previewCanvas.setPointerCapture(e.pointerId);
+  previewPointerCaptureEl().setPointerCapture(e.pointerId);
   const pt = normalizedPointFromPointer(e);
   stickerOverlay = { ...stickerOverlay, x: pt.x, y: pt.y };
   persistStickerOverlay();
   void renderPreview();
-});
+}
 
-previewCanvas.addEventListener("pointermove", (e) => {
+/** @param {PointerEvent} e */
+function onPreviewPointerMove(e) {
   if (!stickerDragging) return;
   const pt = normalizedPointFromPointer(e);
   stickerOverlay = { ...stickerOverlay, x: pt.x, y: pt.y };
   persistStickerOverlay();
   void renderPreview();
-});
+}
 
+/** @param {PointerEvent} e */
 function endStickerDrag(e) {
   if (!stickerDragging) return;
   stickerDragging = false;
   try {
-    previewCanvas.releasePointerCapture(e.pointerId);
+    previewPointerCaptureEl().releasePointerCapture(e.pointerId);
   } catch {
     /* capture already released */
   }
 }
 
+previewCanvas.addEventListener("wheel", onPreviewWheel, { passive: false });
+previewCanvas.addEventListener("pointerdown", onPreviewPointerDown);
+previewCanvas.addEventListener("pointermove", onPreviewPointerMove);
 previewCanvas.addEventListener("pointerup", endStickerDrag);
 previewCanvas.addEventListener("pointercancel", endStickerDrag);
+previewDomEl?.addEventListener("wheel", onPreviewWheel, { passive: false });
+previewDomEl?.addEventListener("pointerdown", onPreviewPointerDown);
+previewDomEl?.addEventListener("pointermove", onPreviewPointerMove);
+previewDomEl?.addEventListener("pointerup", endStickerDrag);
+previewDomEl?.addEventListener("pointercancel", endStickerDrag);
 themeSwitch?.addEventListener("click", () => {
   const current = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
   const next = current === "dark" ? "light" : "dark";
@@ -3234,6 +3466,7 @@ async function init() {
   syncSeed();
   applyTheme(getInitialTheme());
   syncPreviewCanvasBackingStore();
+  ensureMobilePreviewDom();
   renderTabs();
   renderThumbs();
   await renderPreview();
@@ -3254,11 +3487,6 @@ async function init() {
 window.addEventListener("resize", () => {
   if (!thumbGrid?.classList.contains("thumb-grid--virtual")) return;
   scheduleRenderThumbs();
-});
-
-window.addEventListener("pagehide", () => releaseMobilePickerMemory());
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") releaseMobilePickerMemory();
 });
 
 init();

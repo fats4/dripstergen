@@ -132,7 +132,8 @@ body {
     flex-shrink: 0;
   }
 
-  #preview {
+  #preview,
+  .preview-dom {
     width: 100%;
     max-width: 100%;
     max-height: none;
@@ -934,12 +935,14 @@ body {
   position: relative;
 }
 
-.preview-wrap--placeable #preview {
+.preview-wrap--placeable #preview,
+.preview-wrap--placeable .preview-dom {
   cursor: grab;
   touch-action: none;
 }
 
-.preview-wrap--placeable #preview:active {
+.preview-wrap--placeable #preview:active,
+.preview-wrap--placeable .preview-dom:active {
   cursor: grabbing;
 }
 
@@ -1026,6 +1029,43 @@ body {
   aspect-ratio: 1 / 1;
   /* Top corners follow card; bottom flush with toolbar */
   border-radius: 6px 6px 0 0;
+  background: transparent;
+}
+
+#preview[hidden] {
+  display: none !important;
+}
+
+.preview-dom {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+}
+
+.preview-dom .preview-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.preview-dom .preview-layer--sticker {
+  inset: auto;
+  width: 45%;
+  height: auto;
+  max-width: 100%;
+  object-fit: contain;
+  pointer-events: auto;
+  z-index: 5;
+}
+
+[data-theme="dark"] .preview-dom {
   background: transparent;
 }
 
