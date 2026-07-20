@@ -75,7 +75,7 @@ const THUMB_HYDRATE_MAX = 6;
 const THUMB_HYDRATE_MAX_MOBILE = 2;
 const PICKER_TAP_GUARD_MS = 180;
 const MOBILE_VIRTUAL_SCROLL_MS = 320;
-const MOBILE_THUMB_SRC_MAX = 1;
+const MOBILE_THUMB_SRC_MAX = 2;
 const MOBILE_THUMB_SCROLL_SETTLE_MS = 280;
 /** On mobile, sticker grid is search-only above this count (avoids virtual-scroll OOM). */
 const MOBILE_STICKER_SEARCH_ONLY_MIN = 150;
@@ -379,7 +379,8 @@ function assignMobileThumbSrc(img, src) {
 }
 
 function drainMobileThumbSrcQueue() {
-  if (thumbGridScrolling || !isMobilePickerDevice()) return;
+  if (!isMobilePickerDevice()) return;
+  if (thumbGridScrolling) return;
   while (mobileThumbSrcActive < MOBILE_THUMB_SRC_MAX && mobileThumbSrcQueue.length > 0) {
     const img = mobileThumbSrcQueue.shift();
     if (!img?.isConnected) continue;
@@ -410,7 +411,6 @@ function bindThumbGridScrollGate() {
       clearTimeout(thumbGridScrollEndTimer);
       thumbGridScrollEndTimer = window.setTimeout(() => {
         thumbGridScrolling = false;
-        trimOffscreenPickerThumbSrc();
         drainMobileThumbSrcQueue();
       }, MOBILE_THUMB_SCROLL_SETTLE_MS);
     },
@@ -418,23 +418,23 @@ function bindThumbGridScrollGate() {
   );
 }
 
-function trimOffscreenPickerThumbSrc() {
+/** Load thumb <img> elements currently visible in the picker (mobile). */
+function hydrateVisiblePickerThumbs() {
   if (!thumbGrid || !isMobilePickerDevice()) return;
-  const root = thumbGrid.getBoundingClientRect();
-  const margin = 24;
-  for (const img of thumbGrid.querySelectorAll("img.thumb-img")) {
-    const r = img.getBoundingClientRect();
-    const visible = r.bottom > root.top - margin && r.top < root.bottom + margin;
-    if (visible || !img.getAttribute("src")) continue;
-    const restore = img.dataset.src || img.dataset.pendingSrc;
-    img.removeAttribute("src");
-    img.src = "";
-    delete img.dataset.pendingSrc;
-    if (restore) {
-      img.dataset.src = restore;
-      ensureThumbImgObserver()?.observe(img);
+  requestAnimationFrame(() => {
+    const root = thumbGrid.getBoundingClientRect();
+    const margin = 48;
+    const obs = ensureThumbImgObserver();
+    for (const img of thumbGrid.querySelectorAll("img.thumb-img")) {
+      const pending = img.dataset.src;
+      if (!pending || img.getAttribute("src") === pending) continue;
+      const r = img.getBoundingClientRect();
+      const visible = r.bottom > root.top - margin && r.top < root.bottom + margin;
+      if (visible) scheduleMobileImageSrc(img, pending, false);
+      else obs?.observe(img);
     }
-  }
+    drainMobileThumbSrcQueue();
+  });
 }
 
 /** @returns {boolean} */
@@ -652,7 +652,7 @@ function createLazyThumbImage(fullUrl, cat = null) {
   img.decoding = "async";
   const displayUrl = resolvePickerThumbUrl(cat, fullUrl);
   if (useSimpleMobileThumbs()) {
-    img.loading = "lazy";
+    img.decoding = "async";
     img.fetchPriority = "low";
     img.dataset.src = displayUrl;
     if (displayUrl !== fullUrl) img.dataset.fullSrc = fullUrl;
@@ -661,7 +661,10 @@ function createLazyThumbImage(fullUrl, cat = null) {
       () => {
         const fallback = img.dataset.fullSrc;
         if (!fallback || img.src === fallback) return;
-        if (isMobilePickerDevice()) return;
+        if (isMobilePickerDevice()) {
+          scheduleMobileImageSrc(img, fallback, false);
+          return;
+        }
         img.src = fallback;
       },
       { once: true },
@@ -1631,7 +1634,6 @@ function ensureMobilePreviewDom() {
     img.className = `preview-layer preview-layer--${key}`;
     img.alt = "";
     img.decoding = "async";
-    img.loading = "lazy";
     img.fetchPriority = "low";
     previewLayerImgs[key] = img;
     previewDomEl.appendChild(img);
@@ -1644,19 +1646,20 @@ function ensureMobilePreviewDom() {
 }
 
 /**
+ * @param {CategoryKey | null} cat
  * @param {string} fullUrl
- * @returns {string}
  */
-function previewThumbDisplayUrl(fullUrl) {
+function previewThumbUrlForLayer(cat, fullUrl) {
+  if (cat) return categoryThumbUrl(cat, fullUrl);
   return insertThumbPath(fullUrl);
 }
 
 /**
  * @param {HTMLImageElement} img
  * @param {string | null} fullUrl
- * @param {boolean} [highPriority]
+ * @param {CategoryKey | null} [cat]
  */
-function setPreviewLayerImgSrc(img, fullUrl, highPriority = false) {
+function setPreviewLayerImgSrc(img, fullUrl, cat = null) {
   if (!fullUrl) {
     img.hidden = true;
     img.removeAttribute("src");
@@ -1669,21 +1672,26 @@ function setPreviewLayerImgSrc(img, fullUrl, highPriority = false) {
     return;
   }
   img.dataset.full = fullUrl;
-  const thumb = previewThumbDisplayUrl(fullUrl);
+  const thumb = previewThumbUrlForLayer(cat, fullUrl);
   img.hidden = false;
-  img.onerror = () => {
-    img.hidden = true;
-    img.removeAttribute("src");
-    img.src = "";
-  };
   if (isMobilePickerDevice()) {
-    scheduleMobileImageSrc(img, thumb, highPriority);
-  } else {
+    let triedFull = false;
     img.onerror = () => {
-      if (fullUrl && img.src !== fullUrl) img.src = fullUrl;
+      if (!triedFull && fullUrl !== thumb) {
+        triedFull = true;
+        img.src = fullUrl;
+        return;
+      }
+      img.hidden = true;
+      img.src = "";
     };
     img.src = thumb;
+    return;
   }
+  img.onerror = () => {
+    if (fullUrl && img.src !== fullUrl) img.src = fullUrl;
+  };
+  img.src = thumb;
 }
 
 /**
@@ -1722,7 +1730,7 @@ function syncMobileDomPreview(sel, focusCat = null) {
     }
 
     const full = resolveLayerUrl(key, sel[key]);
-    setPreviewLayerImgSrc(img, full, Boolean(focusCat));
+    setPreviewLayerImgSrc(img, full, key);
   }
 }
 
@@ -1743,18 +1751,18 @@ function applyMobileStickerDomTransform() {
   if (previewStickerImgEl.dataset.full !== full) {
     previewStickerImgEl.dataset.full = full;
     const thumb = stickerThumbUrl(full);
+    previewStickerImgEl.hidden = false;
+    let triedFull = false;
     previewStickerImgEl.onerror = () => {
+      if (!triedFull && full !== thumb) {
+        triedFull = true;
+        previewStickerImgEl.src = full;
+        return;
+      }
       previewStickerImgEl.hidden = true;
       previewStickerImgEl.src = "";
     };
-    if (isMobilePickerDevice()) {
-      scheduleMobileImageSrc(previewStickerImgEl, thumb, true);
-    } else {
-      previewStickerImgEl.onerror = () => {
-        if (full && previewStickerImgEl.src !== full) previewStickerImgEl.src = full;
-      };
-      previewStickerImgEl.src = thumb;
-    }
+    previewStickerImgEl.src = thumb;
   }
   previewStickerImgEl.hidden = false;
   const wPct = Math.max(8, Math.min(100, o.scale * 100));
@@ -3017,6 +3025,7 @@ function mountMobileStickerSearchPanel(count, token) {
     sub.textContent = `${count - 1} stickers · ketik ID lalu tap cari`;
     thumbGrid.appendChild(sub);
   }
+  hydrateVisiblePickerThumbs();
 }
 
 /**
@@ -3037,6 +3046,7 @@ function mountThumbGrid(count, token, factory) {
   for (let i = 0; i < count; i++) {
     thumbGrid.appendChild(factory(i));
   }
+  hydrateVisiblePickerThumbs();
 }
 
 /**
@@ -3124,6 +3134,7 @@ function mountVirtualThumbGrid(count, token, factory) {
   } else {
     thumbGrid.onscroll = scheduleVirtualRemount;
   }
+  hydrateVisiblePickerThumbs();
 }
 
 function clampCollabSelection() {
