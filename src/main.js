@@ -60,7 +60,7 @@ const COLLAB_THUMB_BRAND_INSET = THUMB * 0.19;
 /** @typedef {'default' | 'collab-clothes'} ThumbLayout */
 const IMAGE_CACHE_MAX = 300;
 const IMAGE_CACHE_MAX_MOBILE = 0;
-const PREVIEW_CACHE_MAX_MOBILE = 10;
+const PREVIEW_CACHE_MAX_MOBILE = 12;
 const PREVIEW_MOBILE = 384;
 /** Painted thumb bitmaps — instant restore when virtual scroll remounts cells */
 const THUMB_PAINT_CACHE_MAX = 600;
@@ -394,11 +394,18 @@ async function cachePreviewLayer(cache, fullUrl) {
     return getCachedImage(cache, fullUrl).catch(() => null);
   }
   const thumb = insertThumbPath(fullUrl);
+  /** @type {HTMLImageElement | null} */
+  let img = null;
   try {
-    return await getCachedImage(cache, thumb);
+    img = await getCachedImage(cache, thumb);
   } catch {
-    return getCachedImage(cache, fullUrl).catch(() => null);
+    img = await getCachedImage(cache, fullUrl).catch(() => null);
   }
+  if (img) {
+    cache.set(fullUrl, img);
+    if (thumb !== fullUrl && cache.map.has(thumb)) cache.map.delete(thumb);
+  }
+  return img;
 }
 
 /** Mobile uses lazy <img> thumbs — avoids hundreds of large canvases (Safari OOM). */
@@ -1340,14 +1347,18 @@ async function prefetchSelectionLayers(
   /** @type {CategoryKey | null} */ focusCat = null,
 ) {
   const cache = previewCacheForDevice();
-  /** @type {readonly CategoryKey[]} */
-  const keys =
-    focusCat && isMobilePickerDevice()
-      ? /** @type {CategoryKey[]} */ ([focusCat])
-      : COMPOSITE_ORDER;
+  /** @type {CategoryKey[]} */
+  const order = [...COMPOSITE_ORDER];
+  if (focusCat && isMobilePickerDevice()) {
+    const idx = order.indexOf(focusCat);
+    if (idx > 0) {
+      order.splice(idx, 1);
+      order.unshift(focusCat);
+    }
+  }
   /** @type {string[]} */
   const fullUrls = [];
-  for (const key of keys) {
+  for (const key of order) {
     if (token !== previewRenderToken) return;
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
     const full = resolveLayerUrl(key, sel[key]);
@@ -1368,9 +1379,22 @@ async function refreshActiveStickerImage() {
     activeStickerImage = null;
     return;
   }
-  const url = isMobilePickerDevice() ? stickerThumbUrl(full) : full;
+  const cache = previewCacheForDevice();
   try {
-    activeStickerImage = await getCachedImage(previewCacheForDevice(), url);
+    if (isMobilePickerDevice()) {
+      const thumb = stickerThumbUrl(full);
+      let img;
+      try {
+        img = await getCachedImage(cache, thumb);
+      } catch {
+        img = await getCachedImage(cache, full);
+      }
+      cache.set(full, img);
+      if (thumb !== full && cache.map.has(thumb)) cache.map.delete(thumb);
+      activeStickerImage = img;
+      return;
+    }
+    activeStickerImage = await getCachedImage(cache, full);
   } catch {
     activeStickerImage = null;
   }
@@ -1480,9 +1504,7 @@ function applyActiveStickerImage() {
     activeStickerImage = null;
     return;
   }
-  const url = isMobilePickerDevice() ? stickerThumbUrl(full) : full;
-  const cache = previewCacheForDevice();
-  activeStickerImage = cache.get(url) ?? null;
+  activeStickerImage = previewCacheForDevice().get(full) ?? null;
 }
 
 function syncStickerOverlayUi() {
@@ -1862,19 +1884,16 @@ function countLoadedLayersInCache(sel, cache) {
   let loaded = 0;
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
-    const url = isMobilePickerDevice()
-      ? resolvePreviewLayerUrl(key, sel[key])
-      : resolveLayerUrl(key, sel[key]);
+    const url = resolveLayerUrl(key, sel[key]);
     if (!url) continue;
     expected += 1;
     if (cache.get(url)?.naturalWidth) loaded += 1;
   }
   if (stickerOverlay.index > 0) {
     const full = activeStickerFullUrl();
-    const url = full && isMobilePickerDevice() ? stickerThumbUrl(full) : full;
-    if (url) {
+    if (full) {
       expected += 1;
-      if (cache.get(url)?.naturalWidth) loaded += 1;
+      if (cache.get(full)?.naturalWidth) loaded += 1;
     }
   }
   return { expected, loaded };
@@ -1949,13 +1968,7 @@ async function renderPreviewNow(focusCat = null) {
     await refreshActiveStickerImage();
     if (token !== previewRenderToken) return;
   }
-  drawComposite(
-    previewCtx,
-    selection,
-    previewCacheForDevice(),
-    activeStickerImage,
-    resolvePreviewLayerUrl,
-  );
+  drawComposite(previewCtx, selection, previewCacheForDevice(), activeStickerImage);
 }
 
 /**
