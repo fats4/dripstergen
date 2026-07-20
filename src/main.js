@@ -61,7 +61,7 @@ const COLLAB_THUMB_BRAND_INSET = THUMB * 0.19;
 const IMAGE_CACHE_MAX = 300;
 const IMAGE_CACHE_MAX_MOBILE = 0;
 const PREVIEW_CACHE_MAX_MOBILE = 12;
-const PREVIEW_MOBILE = 384;
+const PREVIEW_MOBILE = 320;
 /** Painted thumb bitmaps — instant restore when virtual scroll remounts cells */
 const THUMB_PAINT_CACHE_MAX = 600;
 const THUMB_PAINT_CACHE_MAX_MOBILE = 0;
@@ -279,6 +279,8 @@ const stickerCatalogBySource = {
   monigga: [],
 };
 
+let mobileStickerCatalogLoaded = false;
+
 /** @type {Record<StickerSourceKey, Map<string, number>>} */
 const stickerIdToPickerIndexBySource = {
   skrumpeys: new Map(),
@@ -449,6 +451,58 @@ function isMobilePickerDevice() {
 /** Mobile Safari: text-only picker + sequential canvas preview (no decoded thumb grid). */
 function useMobileLitePicker() {
   return isMobilePickerDevice();
+}
+
+function stripMobileHeavyPageAssets() {
+  if (!useMobileLitePicker()) return;
+  for (const link of document.querySelectorAll('link[href*="fonts.googleapis"], link[href*="fonts.gstatic"]')) {
+    link.remove();
+  }
+  document.documentElement.style.setProperty("font-family", "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif");
+  for (const logo of document.querySelectorAll(".site-logo--dark")) {
+    logo.remove();
+  }
+}
+
+/**
+ * Draw a layer at most `px`×`px` decode size (Safari decodes full PNG/WebP otherwise → OOM).
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {string} url
+ * @param {number} px
+ * @param {number} token
+ */
+async function drawMobileLayerToCanvas(ctx, url, px, token) {
+  if (token !== previewRenderToken || !url) return false;
+  try {
+    const res = await fetch(url, { mode: "cors", credentials: "omit" });
+    if (!res.ok) return false;
+    const blob = await res.blob();
+    if (token !== previewRenderToken) return false;
+    if (typeof createImageBitmap === "function") {
+      const bitmap = await createImageBitmap(blob, {
+        resizeWidth: px,
+        resizeHeight: px,
+        resizeQuality: "medium",
+      });
+      if (token !== previewRenderToken) {
+        bitmap.close();
+        return false;
+      }
+      ctx.drawImage(bitmap, 0, 0, px, px);
+      bitmap.close();
+      return true;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const img = await loadImageElement(url);
+    if (token !== previewRenderToken) return false;
+    ctx.drawImage(img, 0, 0, px, px);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function useMobileDomPreview() {
@@ -695,7 +749,7 @@ function schedulePickerAfterTabChange(tabKey) {
       clearTimeout(stickerTabRenderTimer);
       stickerTabRenderTimer = window.setTimeout(() => {
         stickerTabRenderTimer = 0;
-        scheduleRenderThumbsNow();
+        void ensureStickerCatalogLoaded().then(() => scheduleRenderThumbsNow());
       }, MOBILE_STICKER_TAB_DELAY_MS);
       return;
     }
@@ -2020,6 +2074,13 @@ async function loadStickerCatalog() {
     }
   }
   rebuildStickerIdMaps();
+  mobileStickerCatalogLoaded = true;
+}
+
+/** @returns {Promise<void>} */
+async function ensureStickerCatalogLoaded() {
+  if (mobileStickerCatalogLoaded) return;
+  await loadStickerCatalog();
 }
 
 function syncStickerSourceAccess() {
@@ -2251,33 +2312,19 @@ async function drawCompositeMobileLite(ctx, sel, token = previewRenderToken) {
     const full = resolveLayerUrl(key, sel[key]);
     if (!full) continue;
     const thumb = categoryThumbUrl(key, full);
-    let img;
-    try {
-      img = await loadImageElement(thumb);
-    } catch {
-      try {
-        img = await loadImageElement(full);
-      } catch {
-        continue;
-      }
-    }
-    if (token !== previewRenderToken) return;
-    ctx.drawImage(img, 0, 0, px, px);
+    await drawMobileLayerToCanvas(ctx, thumb, px, token);
   }
 
   if (token !== previewRenderToken) return;
   activeStickerImage = null;
-  if (stickerOverlay.index > 0) {
+  if (activeTab === STICKERS_TAB && stickerOverlay.index > 0) {
     const full = activeStickerFullUrl();
     if (full) {
+      const thumb = stickerThumbUrl(full);
       try {
-        activeStickerImage = await loadImageElement(stickerThumbUrl(full));
+        activeStickerImage = await loadImageElement(thumb);
       } catch {
-        try {
-          activeStickerImage = await loadImageElement(full);
-        } catch {
-          activeStickerImage = null;
-        }
+        activeStickerImage = null;
       }
     }
   }
@@ -3058,6 +3105,8 @@ async function applyStickerSearch() {
   const query = stickerSearchInput.value.trim();
   if (!query) return;
 
+  await ensureStickerCatalogLoaded();
+
   const index = findStickerPickerIndexById(activeStickerSubTab, query);
   if (index == null) {
     setStickerSearchFeedback(`Sticker "${normalizeStickerIdQuery(query)}" not found`, true);
@@ -3730,15 +3779,24 @@ async function clearLegacyServiceWorkers() {
 
 async function init() {
   await clearLegacyServiceWorkers();
+  stripMobileHeavyPageAssets();
   loadStoredCustomBackgroundColor();
   try {
-    await Promise.all([loadTraitCatalog(), loadStickerCatalog()]);
+    if (useMobileLitePicker()) {
+      await loadTraitCatalog();
+    } else {
+      await Promise.all([loadTraitCatalog(), loadStickerCatalog()]);
+    }
   } catch (e) {
     console.error(e);
   }
   syncStickerSourceAccess();
   clampSelection();
   applyInitialState();
+  if (useMobileLitePicker()) {
+    stickerOverlay = defaultStickerOverlay();
+    persistStickerOverlay();
+  }
   clampSelection();
   clampCollabSelection();
   clampStickerSelection();
@@ -3754,7 +3812,13 @@ async function init() {
   }
   renderTabs();
   renderThumbs();
-  await renderPreview();
+  if (useMobileLitePicker()) {
+    window.setTimeout(() => {
+      void renderPreview();
+    }, 400);
+  } else {
+    await renderPreview();
+  }
   if (mobileDebugEnabled()) {
     window.__dripLabDebug = () => ({
       previewCache: previewImageCache.map.size,
