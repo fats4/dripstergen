@@ -10,6 +10,7 @@ import {
   traitsMoniggaStickersUrl,
   usesRemoteAssets,
   stickerThumbUrl,
+  insertThumbPath,
 } from "./assets.js";
 import { getCachedImage, LruImageCache } from "./image-cache.js";
 import { exportCorsSetupMessage, loadExportTraitImage } from "./traits-export.js";
@@ -58,8 +59,9 @@ const COLLAB_THUMB_BRAND_INSET = THUMB * 0.19;
 
 /** @typedef {'default' | 'collab-clothes'} ThumbLayout */
 const IMAGE_CACHE_MAX = 300;
-const IMAGE_CACHE_MAX_MOBILE = 12;
-const PREVIEW_MOBILE = 512;
+const IMAGE_CACHE_MAX_MOBILE = 0;
+const PREVIEW_CACHE_MAX_MOBILE = 10;
+const PREVIEW_MOBILE = 384;
 /** Painted thumb bitmaps — instant restore when virtual scroll remounts cells */
 const THUMB_PAINT_CACHE_MAX = 600;
 const THUMB_PAINT_CACHE_MAX_MOBILE = 0;
@@ -73,6 +75,8 @@ const PICKER_TAP_GUARD_MS = 120;
 const MOBILE_VIRTUAL_SCROLL_MS = 140;
 
 const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
+/** Mobile preview composites — thumb-sized decodes only (full-res stays in export cache). */
+const previewImageCache = new LruImageCache(IMAGE_CACHE_MAX);
 /** Fresh CORS-only images for PNG export — never shared with preview cache. */
 const exportImageCache = new LruImageCache(IMAGE_CACHE_MAX);
 
@@ -89,8 +93,8 @@ app.innerHTML = `
 <div class="app">
   <header class="header">
     <h1 class="title">
-      <img class="site-logo site-logo--light" src="/driplab-logo-black.png" alt="DRIP[lab]" width="1024" height="115" />
-      <img class="site-logo site-logo--dark" src="/driplab-logo-white.png" alt="DRIP[lab]" width="1024" height="116" />
+      <img class="site-logo site-logo--light" src="/driplab-logo-black.png" alt="DRIP[lab]" width="320" height="36" decoding="async" />
+      <img class="site-logo site-logo--dark" src="/driplab-logo-white.png" alt="DRIP[lab]" width="320" height="36" decoding="async" loading="lazy" />
     </h1>
     <p class="subtitle">powered by mondrips</p>
   </header>
@@ -351,6 +355,52 @@ function syncPreviewCanvasBackingStore() {
   }
 }
 
+/** @returns {LruImageCache} */
+function previewCacheForDevice() {
+  if (isMobilePickerDevice()) {
+    previewImageCache.max = PREVIEW_CACHE_MAX_MOBILE;
+    return previewImageCache;
+  }
+  return imageCache;
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @param {number} selIndex
+ * @returns {string | null}
+ */
+function resolvePreviewLayerUrl(cat, selIndex) {
+  const full = resolveLayerUrl(cat, selIndex);
+  if (!full || !isMobilePickerDevice()) return full;
+  return insertThumbPath(full);
+}
+
+function releaseThumbGridImages() {
+  if (!thumbGrid) return;
+  for (const img of thumbGrid.querySelectorAll("img.thumb-img")) {
+    img.removeAttribute("src");
+    img.src = "";
+  }
+}
+
+/**
+ * @param {LruImageCache} cache
+ * @param {string | null} fullUrl
+ * @returns {Promise<HTMLImageElement | null>}
+ */
+async function cachePreviewLayer(cache, fullUrl) {
+  if (!fullUrl) return null;
+  if (!isMobilePickerDevice()) {
+    return getCachedImage(cache, fullUrl).catch(() => null);
+  }
+  const thumb = insertThumbPath(fullUrl);
+  try {
+    return await getCachedImage(cache, thumb);
+  } catch {
+    return getCachedImage(cache, fullUrl).catch(() => null);
+  }
+}
+
 /** Mobile uses lazy <img> thumbs — avoids hundreds of large canvases (Safari OOM). */
 function useSimpleMobileThumbs() {
   return isMobilePickerDevice();
@@ -403,7 +453,15 @@ function maxThumbPaintCacheEntries() {
 }
 
 function trimImageCacheForDevice() {
-  const cap = isMobilePickerDevice() ? IMAGE_CACHE_MAX_MOBILE : IMAGE_CACHE_MAX;
+  if (isMobilePickerDevice()) {
+    imageCache.map.clear();
+    while (previewImageCache.map.size > PREVIEW_CACHE_MAX_MOBILE) {
+      const oldest = previewImageCache.map.keys().next().value;
+      if (oldest) previewImageCache.map.delete(oldest);
+    }
+    return;
+  }
+  const cap = IMAGE_CACHE_MAX;
   while (imageCache.map.size > cap) {
     const oldest = imageCache.map.keys().next().value;
     if (oldest) imageCache.map.delete(oldest);
@@ -459,6 +517,7 @@ function createLazyThumbImage(fullUrl, cat = null) {
   const displayUrl = resolvePickerThumbUrl(cat, fullUrl);
   if (useSimpleMobileThumbs()) {
     img.loading = "lazy";
+    img.fetchPriority = "low";
     img.src = displayUrl;
     if (displayUrl !== fullUrl) {
       img.addEventListener(
@@ -1061,7 +1120,9 @@ async function onCategoryEntryClick(cat, entry) {
   } else {
     updatePickerSelectionHighlight(cat);
   }
-  if (prefetchUrl && !isMobilePickerDevice()) {
+  if (prefetchUrl && isMobilePickerDevice()) {
+    await getCachedImage(previewCacheForDevice(), insertThumbPath(prefetchUrl)).catch(() => null);
+  } else if (prefetchUrl) {
     await getCachedImage(imageCache, prefetchUrl).catch(() => null);
   }
   await renderPreview(locksChanged ? null : cat);
@@ -1278,22 +1339,23 @@ async function prefetchSelectionLayers(
   token = previewRenderToken,
   /** @type {CategoryKey | null} */ focusCat = null,
 ) {
+  const cache = previewCacheForDevice();
   /** @type {readonly CategoryKey[]} */
   const keys =
     focusCat && isMobilePickerDevice()
       ? /** @type {CategoryKey[]} */ ([focusCat])
       : COMPOSITE_ORDER;
   /** @type {string[]} */
-  const urls = [];
+  const fullUrls = [];
   for (const key of keys) {
     if (token !== previewRenderToken) return;
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
-    const url = resolveLayerUrl(key, sel[key]);
-    if (url) urls.push(url);
+    const full = resolveLayerUrl(key, sel[key]);
+    if (full) fullUrls.push(full);
   }
-  for (const url of urls) {
+  for (const full of fullUrls) {
     if (token !== previewRenderToken) return;
-    await getCachedImage(imageCache, url).catch(() => null);
+    await cachePreviewLayer(cache, full);
   }
 }
 
@@ -1301,13 +1363,14 @@ async function prefetchSelectionLayers(
  * @returns {Promise<void>}
  */
 async function refreshActiveStickerImage() {
-  const url = activeStickerFullUrl();
-  if (!url) {
+  const full = activeStickerFullUrl();
+  if (!full) {
     activeStickerImage = null;
     return;
   }
+  const url = isMobilePickerDevice() ? stickerThumbUrl(full) : full;
   try {
-    activeStickerImage = await getCachedImage(imageCache, url);
+    activeStickerImage = await getCachedImage(previewCacheForDevice(), url);
   } catch {
     activeStickerImage = null;
   }
@@ -1412,8 +1475,14 @@ function persistStickerOverlay() {
 }
 
 function applyActiveStickerImage() {
-  const url = activeStickerFullUrl();
-  activeStickerImage = url ? imageCache.get(url) ?? null : null;
+  const full = activeStickerFullUrl();
+  if (!full) {
+    activeStickerImage = null;
+    return;
+  }
+  const url = isMobilePickerDevice() ? stickerThumbUrl(full) : full;
+  const cache = previewCacheForDevice();
+  activeStickerImage = cache.get(url) ?? null;
 }
 
 function syncStickerOverlayUi() {
@@ -1793,13 +1862,16 @@ function countLoadedLayersInCache(sel, cache) {
   let loaded = 0;
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
-    const url = resolveLayerUrl(key, sel[key]);
+    const url = isMobilePickerDevice()
+      ? resolvePreviewLayerUrl(key, sel[key])
+      : resolveLayerUrl(key, sel[key]);
     if (!url) continue;
     expected += 1;
     if (cache.get(url)?.naturalWidth) loaded += 1;
   }
   if (stickerOverlay.index > 0) {
-    const url = activeStickerFullUrl();
+    const full = activeStickerFullUrl();
+    const url = full && isMobilePickerDevice() ? stickerThumbUrl(full) : full;
     if (url) {
       expected += 1;
       if (cache.get(url)?.naturalWidth) loaded += 1;
@@ -1847,10 +1919,28 @@ async function loadExportLayers(sel = selection) {
   return stickerImg;
 }
 
+let previewDebounceTimer = 0;
+
 /**
  * @param {CategoryKey | null} [focusCat] Layer that changed (mobile loads only this layer first).
  */
 async function renderPreview(focusCat = null) {
+  if (isMobilePickerDevice()) {
+    return new Promise((resolve) => {
+      clearTimeout(previewDebounceTimer);
+      previewDebounceTimer = window.setTimeout(() => {
+        previewDebounceTimer = 0;
+        void renderPreviewNow(focusCat).then(resolve);
+      }, 72);
+    });
+  }
+  return renderPreviewNow(focusCat);
+}
+
+/**
+ * @param {CategoryKey | null} [focusCat]
+ */
+async function renderPreviewNow(focusCat = null) {
   previewRenderToken += 1;
   const token = previewRenderToken;
   await prefetchSelectionLayers(selection, token, focusCat);
@@ -1859,7 +1949,13 @@ async function renderPreview(focusCat = null) {
     await refreshActiveStickerImage();
     if (token !== previewRenderToken) return;
   }
-  drawComposite(previewCtx, selection);
+  drawComposite(
+    previewCtx,
+    selection,
+    previewCacheForDevice(),
+    activeStickerImage,
+    resolvePreviewLayerUrl,
+  );
 }
 
 /**
@@ -2380,7 +2476,11 @@ async function onTraitThumbClick(cat, index) {
     return;
   }
   const url = resolveLayerUrl(cat, index);
-  if (url && !isMobilePickerDevice()) await getCachedImage(imageCache, url).catch(() => null);
+  if (url && isMobilePickerDevice()) {
+    await getCachedImage(previewCacheForDevice(), insertThumbPath(url)).catch(() => null);
+  } else if (url) {
+    await getCachedImage(imageCache, url).catch(() => null);
+  }
   await renderPreview(cat);
 }
 
@@ -2542,7 +2642,7 @@ function mountVirtualThumbGrid(count, token, factory) {
   const totalRows = Math.ceil(count / cols);
   const viewH = thumbGrid.clientHeight || 400;
   const scrollTop = thumbGrid.scrollTop;
-  const buffer = isMobilePickerDevice() ? 1 : 2;
+  const buffer = isMobilePickerDevice() ? 0 : 2;
   const startRow = Math.max(0, Math.floor(scrollTop / rowHeight) - buffer);
   const endRow = Math.min(totalRows, Math.ceil((scrollTop + viewH) / rowHeight) + buffer);
 
@@ -2665,6 +2765,15 @@ function renderStickerSubTabs() {
   }
 }
 
+function syncTabSelectionUi() {
+  if (!tabsEl) return;
+  for (const btn of tabsEl.querySelectorAll("button.tab")) {
+    const key = /** @type {PickerTabKey | undefined} */ (btn.dataset.tab);
+    if (key) btn.setAttribute("aria-selected", key === activeTab ? "true" : "false");
+  }
+  renderStickerSubTabs();
+}
+
 function renderTabs() {
   if (!tabsEl) return;
   tabsEl.innerHTML = "";
@@ -2673,12 +2782,13 @@ function renderTabs() {
     btn.type = "button";
     btn.className = "tab";
     btn.role = "tab";
+    btn.dataset.tab = key;
     btn.textContent = PICKER_TAB_LABELS[key];
     btn.setAttribute("aria-selected", key === activeTab ? "true" : "false");
     btn.addEventListener("click", () => {
       if (activeTab === key) return;
       activeTab = key;
-      renderTabs();
+      syncTabSelectionUi();
       syncBackgroundColorUi();
       syncStickerSearchUi();
       syncStickerOverlayUi();
@@ -2697,8 +2807,13 @@ function updatePickerSelectionHighlight(cat) {
   if (!thumbGrid) return;
 
   if (thumbGrid.classList.contains("thumb-grid--virtual")) {
+    const buttons = getVisibleThumbButtons();
+    if (!buttons.length) {
+      scheduleRenderThumbs();
+      return;
+    }
     if (cat === STICKERS_TAB) {
-      for (const btn of getVisibleThumbButtons()) {
+      for (const btn of buttons) {
         const idx = Number(btn.dataset.index);
         if (!Number.isFinite(idx)) continue;
         btn.setAttribute(
@@ -2708,7 +2823,23 @@ function updatePickerSelectionHighlight(cat) {
       }
       return;
     }
-    scheduleRenderThumbs();
+    const entries = getCategoryPickerEntries(/** @type {CategoryKey} */ (cat));
+    if (cat !== "background" && buttons.length === entries.length) {
+      entries.forEach((entry, i) => {
+        const btn = buttons[i];
+        if (!btn) return;
+        btn.setAttribute("aria-selected", isCategoryEntrySelected(cat, entry) ? "true" : "false");
+      });
+      return;
+    }
+    for (const btn of buttons) {
+      const idx = Number(btn.dataset.index);
+      if (!Number.isFinite(idx)) continue;
+      btn.setAttribute(
+        "aria-selected",
+        selection[/** @type {CategoryKey} */ (cat)] === idx ? "true" : "false",
+      );
+    }
     return;
   }
 
@@ -2762,6 +2893,7 @@ function renderThumbs() {
   thumbRenderScheduleRaf = 0;
   cancelThumbHydrateQueue();
   disconnectThumbImgObserver();
+  releaseThumbGridImages();
   thumbGrid.onscroll = null;
   /** @type {((this: HTMLElement, ev: Event) => void) | null} */
   thumbGrid.onscrollend = null;
@@ -3092,6 +3224,15 @@ async function init() {
   renderTabs();
   renderThumbs();
   await renderPreview();
+  if (new URLSearchParams(location.search).has("debug")) {
+    window.__dripLabDebug = () => ({
+      previewCache: previewImageCache.map.size,
+      imageCache: imageCache.map.size,
+      activeTab,
+      virtual: virtualThumbMount,
+      previewPx: previewPixelSize(),
+    });
+  }
   requestAnimationFrame(() => {
     requestAnimationFrame(syncPickerHeightToPreview);
   });
