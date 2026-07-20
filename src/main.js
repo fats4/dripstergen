@@ -58,18 +58,19 @@ const COLLAB_THUMB_BRAND_INSET = THUMB * 0.19;
 
 /** @typedef {'default' | 'collab-clothes'} ThumbLayout */
 const IMAGE_CACHE_MAX = 300;
-const IMAGE_CACHE_MAX_MOBILE = 32;
+const IMAGE_CACHE_MAX_MOBILE = 12;
+const PREVIEW_MOBILE = 512;
 /** Painted thumb bitmaps — instant restore when virtual scroll remounts cells */
 const THUMB_PAINT_CACHE_MAX = 600;
 const THUMB_PAINT_CACHE_MAX_MOBILE = 0;
 /** Above this count, thumb grid uses virtual scroll (for 3000+ assets) */
 const VIRTUAL_THUMB_THRESHOLD = 60;
-/** Mobile: virtualize almost all grids so only visible rows decode images */
-const VIRTUAL_THUMB_THRESHOLD_MOBILE = 1;
+/** Mobile: virtual scroll only for huge sticker lists; skin/clothes use a simple lazy grid */
+const VIRTUAL_THUMB_THRESHOLD_MOBILE = 100;
 const THUMB_HYDRATE_MAX = 6;
 const THUMB_HYDRATE_MAX_MOBILE = 2;
 const PICKER_TAP_GUARD_MS = 120;
-const MOBILE_VIRTUAL_SCROLL_MS = 56;
+const MOBILE_VIRTUAL_SCROLL_MS = 140;
 
 const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
 /** Fresh CORS-only images for PNG export — never shared with preview cache. */
@@ -337,6 +338,19 @@ function isMobilePickerDevice() {
   );
 }
 
+/** @returns {number} Preview canvas backing store (export stays at PREVIEW). */
+function previewPixelSize() {
+  return isMobilePickerDevice() ? PREVIEW_MOBILE : PREVIEW;
+}
+
+function syncPreviewCanvasBackingStore() {
+  const px = previewPixelSize();
+  if (previewCanvas.width !== px) {
+    previewCanvas.width = px;
+    previewCanvas.height = px;
+  }
+}
+
 /** Mobile uses lazy <img> thumbs — avoids hundreds of large canvases (Safari OOM). */
 function useSimpleMobileThumbs() {
   return isMobilePickerDevice();
@@ -444,18 +458,17 @@ function createLazyThumbImage(fullUrl, cat = null) {
   img.decoding = "async";
   const displayUrl = resolvePickerThumbUrl(cat, fullUrl);
   if (useSimpleMobileThumbs()) {
-    img.dataset.src = displayUrl;
-    if (displayUrl !== fullUrl) img.dataset.fullSrc = fullUrl;
-    img.addEventListener(
-      "error",
-      () => {
-        const fallback = img.dataset.fullSrc;
-        if (fallback && img.src !== fallback) img.src = fallback;
-      },
-      { once: true },
-    );
-    const obs = ensureThumbImgObserver();
-    obs?.observe(img);
+    img.loading = "lazy";
+    img.src = displayUrl;
+    if (displayUrl !== fullUrl) {
+      img.addEventListener(
+        "error",
+        () => {
+          if (fullUrl && img.src !== fullUrl) img.src = fullUrl;
+        },
+        { once: true },
+      );
+    }
   } else {
     img.loading = "lazy";
     img.src = displayUrl;
@@ -465,14 +478,8 @@ function createLazyThumbImage(fullUrl, cat = null) {
 
 function releaseMobilePickerMemory() {
   if (!isMobilePickerDevice()) return;
-  disconnectThumbImgObserver();
   thumbPaintCache.clear();
-  thumbBoundsCache.clear();
-  trimImageCacheForDevice();
-  while (imageCache.map.size > 20) {
-    const oldest = imageCache.map.keys().next().value;
-    if (oldest) imageCache.map.delete(oldest);
-  }
+  if (thumbBoundsCache.size > 48) thumbBoundsCache.clear();
 }
 
 function scheduleRenderThumbs() {
@@ -1205,6 +1212,12 @@ function scrollThumbGridToIndex(index) {
     const { cols, rowHeight } = getThumbGridMetrics();
     const row = Math.floor(index / cols);
     thumbGrid.scrollTop = row * rowHeight;
+    if (!thumbGrid.classList.contains("thumb-grid--virtual")) return;
+    virtualThumbMount = null;
+    if (isMobilePickerDevice()) {
+      scheduleRenderThumbs();
+      return;
+    }
     thumbGrid.dispatchEvent(new Event("scroll"));
   });
 }
@@ -1422,13 +1435,14 @@ function syncStickerOverlayUi() {
  * @returns {{ w: number; h: number; cx: number; cy: number }}
  */
 function stickerOverlayLayout(o, stickerImg = activeStickerImage) {
+  const px = previewPixelSize();
   const img = stickerImg;
   if (!img?.naturalWidth) {
-    return { w: 0, h: 0, cx: o.x * PREVIEW, cy: o.y * PREVIEW };
+    return { w: 0, h: 0, cx: o.x * px, cy: o.y * px };
   }
-  const w = PREVIEW * o.scale;
+  const w = px * o.scale;
   const h = (img.naturalHeight / img.naturalWidth) * w;
-  return { w, h, cx: o.x * PREVIEW, cy: o.y * PREVIEW };
+  return { w, h, cx: o.x * px, cy: o.y * px };
 }
 
 /**
@@ -1739,29 +1753,30 @@ function drawComposite(
   stickerImg = activeStickerImage,
   resolveUrl = resolveLayerUrl,
 ) {
-  ctx.clearRect(0, 0, PREVIEW, PREVIEW);
+  const px = previewPixelSize();
+  ctx.clearRect(0, 0, px, px);
 
   const hasCustomBg = isCustomBackgroundIndex(sel.background);
   const hasImageBg = sel.background > 0 && sel.background <= traitCatalog.background.length;
 
   if (!hasCustomBg && !hasImageBg && traitCatalog.background.length === 0) {
-    const grad = ctx.createLinearGradient(0, 0, PREVIEW, PREVIEW);
+    const grad = ctx.createLinearGradient(0, 0, px, px);
     grad.addColorStop(0, "#e0e7ff");
     grad.addColorStop(1, "#f5d0fe");
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, PREVIEW, PREVIEW);
+    ctx.fillRect(0, 0, px, px);
   }
 
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && hasCustomBg) {
       ctx.fillStyle = customBackgroundColor;
-      ctx.fillRect(0, 0, PREVIEW, PREVIEW);
+      ctx.fillRect(0, 0, px, px);
       continue;
     }
     const url = resolveUrl(key, sel[key]);
     const img = url ? cache.get(url) : undefined;
     if (img) {
-      ctx.drawImage(img, 0, 0, PREVIEW, PREVIEW);
+      ctx.drawImage(img, 0, 0, px, px);
     }
   }
 
@@ -2506,6 +2521,8 @@ function mountThumbGrid(count, token, factory) {
   virtualThumbMount = null;
   thumbGrid.classList.remove("thumb-grid--virtual");
   thumbGrid.onscroll = null;
+  /** @type {((this: HTMLElement, ev: Event) => void) | null} */
+  thumbGrid.onscrollend = null;
   thumbGrid.innerHTML = "";
 
   for (let i = 0; i < count; i++) {
@@ -2565,9 +2582,20 @@ function mountVirtualThumbGrid(count, token, factory) {
   bottom.style.height = `${Math.max(0, totalRows - endRow) * rowHeight}px`;
 
   thumbGrid.append(top, windowEl, bottom);
-  thumbGrid.scrollTop = savedScrollTop;
 
-  thumbGrid.onscroll = () => {
+  let scrollLocked = true;
+  thumbGrid.onscroll = null;
+  /** @type {((this: HTMLElement, ev: Event) => void) | null} */
+  thumbGrid.onscrollend = null;
+  thumbGrid.scrollTop = savedScrollTop;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      scrollLocked = false;
+    });
+  });
+
+  const scheduleVirtualRemount = () => {
+    if (scrollLocked) return;
     cancelAnimationFrame(thumbScrollRaf);
     thumbScrollRaf = requestAnimationFrame(() => {
       if (token !== thumbRenderToken) return;
@@ -2579,6 +2607,12 @@ function mountVirtualThumbGrid(count, token, factory) {
       mountVirtualThumbGrid(count, token, factory);
     });
   };
+
+  if (isMobilePickerDevice() && "onscrollend" in thumbGrid) {
+    thumbGrid.onscrollend = scheduleVirtualRemount;
+  } else {
+    thumbGrid.onscroll = scheduleVirtualRemount;
+  }
 }
 
 function clampCollabSelection() {
@@ -2729,6 +2763,8 @@ function renderThumbs() {
   cancelThumbHydrateQueue();
   disconnectThumbImgObserver();
   thumbGrid.onscroll = null;
+  /** @type {((this: HTMLElement, ev: Event) => void) | null} */
+  thumbGrid.onscrollend = null;
   virtualThumbMount = null;
   if (isMobilePickerDevice()) {
     thumbPaintCache.clear();
@@ -3052,6 +3088,7 @@ async function init() {
   syncStickerSearchUi();
   syncSeed();
   applyTheme(getInitialTheme());
+  syncPreviewCanvasBackingStore();
   renderTabs();
   renderThumbs();
   await renderPreview();

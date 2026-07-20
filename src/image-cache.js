@@ -10,8 +10,8 @@ const loadWaitQueue = [];
 /** @returns {number} */
 function maxParallelImageLoads() {
   if (typeof window === "undefined") return 8;
-  if (window.innerWidth < 768) return 3;
-  if (window.matchMedia("(pointer: coarse)").matches) return 3;
+  if (window.innerWidth < 768) return 2;
+  if (window.matchMedia("(pointer: coarse)").matches) return 2;
   return 8;
 }
 
