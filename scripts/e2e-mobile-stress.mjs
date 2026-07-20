@@ -23,9 +23,9 @@ page.on("console", (msg) => {
 });
 page.on("pageerror", (err) => consoleErrors.push(String(err)));
 
-await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 120_000 });
+await page.goto(URL, { waitUntil: "load", timeout: 120_000 });
 await page.waitForSelector("#thumbGrid .thumb", { timeout: 90_000 });
-await page.waitForTimeout(1500);
+await page.waitForTimeout(2000);
 
 const tabs = page.locator("#tabs button.tab");
 const tabCount = await tabs.count();
