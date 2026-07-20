@@ -5,6 +5,72 @@ const inFlight = new Map();
 
 /**
  * @param {string} url
+ * @param {number | null | undefined} maxDecodePx
+ * @returns {string}
+ */
+export function displayCacheKey(url, maxDecodePx) {
+  if (!maxDecodePx) return url;
+  return `${url}#d=${maxDecodePx}`;
+}
+
+/**
+ * @param {ImageBitmap} bitmap
+ * @returns {Promise<HTMLImageElement>}
+ */
+async function imageElementFromBitmap(bitmap) {
+  const w = bitmap.width;
+  const h = bitmap.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    bitmap.close();
+    throw new Error("2d context");
+  }
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const blob = await new Promise((/** @type {(b: Blob | null) => void} */ resolve) => {
+    canvas.toBlob(resolve, "image/webp", 0.88);
+  });
+  if (!blob) throw new Error("toBlob failed");
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const img = await loadImageElementOnce(objectUrl, false);
+    return img;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+/**
+ * Fetch + resize at decode time to limit memory (Safari-friendly when CORS allows fetch).
+ * @param {string} url
+ * @param {number} maxDecodePx
+ * @returns {Promise<HTMLImageElement>}
+ */
+async function loadImageElementCappedDecode(url, maxDecodePx) {
+  const side = Math.max(32, Math.round(maxDecodePx));
+  const res = await fetch(url, { mode: "cors", credentials: "omit", cache: "force-cache" });
+  if (!res.ok) throw new Error(`fetch ${res.status}`);
+  const blob = await res.blob();
+  if (typeof createImageBitmap !== "function") {
+    return loadImageElement(url);
+  }
+  try {
+    const bitmap = await createImageBitmap(blob, {
+      resizeWidth: side,
+      resizeHeight: side,
+      resizeQuality: "medium",
+    });
+    return await imageElementFromBitmap(bitmap);
+  } catch {
+    return loadImageElement(url);
+  }
+}
+
+/**
+ * @param {string} url
  * @param {boolean} [useCors]
  * @returns {Promise<HTMLImageElement>}
  */
@@ -98,6 +164,39 @@ export async function getCachedImage(cache, url) {
     });
 
   inFlight.set(url, promise);
+  return promise;
+}
+
+/**
+ * Preview/picker loads — optional decode cap stored under {@link displayCacheKey}.
+ * @param {LruImageCache} cache
+ * @param {string} url
+ * @param {number | null | undefined} maxDecodePx
+ * @returns {Promise<HTMLImageElement>}
+ */
+export async function getCachedImageForDisplay(cache, url, maxDecodePx) {
+  const key = displayCacheKey(url, maxDecodePx);
+  const hit = cache.get(key);
+  if (hit) return hit;
+
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+
+  const promise = (maxDecodePx
+    ? loadImageElementCappedDecode(url, maxDecodePx).catch(() => loadImageElement(url))
+    : loadImageElement(url)
+  )
+    .then((img) => {
+      cache.set(key, img);
+      inFlight.delete(key);
+      return img;
+    })
+    .catch((err) => {
+      inFlight.delete(key);
+      throw err;
+    });
+
+  inFlight.set(key, promise);
   return promise;
 }
 

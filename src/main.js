@@ -4,13 +4,27 @@ import bundledTraitLocks from "./trait-locks.json";
 import {
   categoryAssetUrl,
   categoryThumbUrl,
+  traitThumbUrl,
   traitsManifestUrl,
   traitsScanUrl,
   traitsCollabUrl,
   traitsMoniggaStickersUrl,
   usesRemoteAssets,
 } from "./assets.js";
-import { getCachedImage, LruImageCache } from "./image-cache.js";
+import {
+  EXPORT_CANVAS_PX,
+  displayTier,
+  maxDecodePxForPreview,
+  previewCanvasPx,
+  previewImageCacheMax,
+  thumbBufferMaxPx,
+} from "./display-quality.js";
+import {
+  displayCacheKey,
+  getCachedImage,
+  getCachedImageForDisplay,
+  LruImageCache,
+} from "./image-cache.js";
 import { exportCorsSetupMessage, loadExportTraitImage } from "./traits-export.js";
 import {
   CATEGORY_KEYS,
@@ -48,8 +62,8 @@ import {
 /** @typedef {import('./state.js').CollabSelection} CollabSelection */
 /** @typedef {import('./state.js').CollabPartnerKey} CollabPartnerKey */
 
-/** Internal preview & download resolution — higher = sharper (assets ideally ≥ this) */
-const PREVIEW = 1024;
+/** Internal preview & download resolution — export always uses {@link EXPORT_CANVAS_PX} */
+const PREVIEW = EXPORT_CANVAS_PX;
 /** Logical thumbnail size (px); larger canvas buffer for Retina + wide grid cells */
 const THUMB = 96;
 /** Tab thumb only — room for `.thumb-collab-brand` (preview composite unchanged) */
@@ -62,7 +76,7 @@ const THUMB_PAINT_CACHE_MAX = 600;
 /** Above this count, thumb grid uses virtual scroll (for 3000+ assets) */
 const VIRTUAL_THUMB_THRESHOLD = 60;
 
-const imageCache = new LruImageCache(IMAGE_CACHE_MAX);
+const imageCache = new LruImageCache(previewImageCacheMax());
 /** Fresh CORS-only images for PNG export — never shared with preview cache. */
 const exportImageCache = new LruImageCache(IMAGE_CACHE_MAX);
 
@@ -869,7 +883,7 @@ async function onCategoryEntryClick(cat, entry) {
   enforceTraitLocks();
   syncSeed();
   renderThumbs();
-  if (prefetchUrl) await getCachedImage(imageCache, prefetchUrl).catch(() => null);
+  if (prefetchUrl) await loadPreviewLayerImage(prefetchUrl).catch(() => null);
   await renderPreview();
 }
 
@@ -916,6 +930,47 @@ function resolveLayerUrl(cat, selIndex) {
     if (url) return url;
   }
   return traitFullUrl(cat, selIndex);
+}
+
+/** Preview backing-store size (may be smaller than export on mobile). */
+let previewRenderPx = previewCanvasPx();
+
+/**
+ * @param {string} fullUrl
+ * @returns {Promise<HTMLImageElement | null>}
+ */
+async function loadPreviewLayerImage(fullUrl) {
+  if (!fullUrl) return null;
+  const tier = displayTier();
+  const maxDecode = maxDecodePxForPreview(tier);
+  if (tier === "high") {
+    return getCachedImageForDisplay(imageCache, fullUrl, null);
+  }
+  const thumb = traitThumbUrl(fullUrl);
+  try {
+    return await getCachedImageForDisplay(imageCache, thumb, maxDecode);
+  } catch {
+    return getCachedImageForDisplay(imageCache, fullUrl, maxDecode);
+  }
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @param {number} _selIndex
+ * @param {string | null} fullUrl
+ * @returns {HTMLImageElement | undefined}
+ */
+function getPreviewLayerImageFromCache(cat, _selIndex, fullUrl) {
+  if (!fullUrl) return undefined;
+  const tier = displayTier();
+  if (tier === "high") return imageCache.get(fullUrl);
+  const thumb = traitThumbUrl(fullUrl);
+  const maxDecode = maxDecodePxForPreview(tier);
+  return (
+    imageCache.get(thumb) ??
+    imageCache.get(displayCacheKey(fullUrl, maxDecode)) ??
+    undefined
+  );
 }
 
 function clearCollabForCategory(cat) {
@@ -1074,16 +1129,14 @@ function getThumbGridMetrics() {
  * @returns {Promise<void>}
  */
 async function prefetchSelectionLayers(sel = selection) {
-  /** @type {string[]} */
-  const urls = [];
+  /** @type {Promise<unknown>[]} */
+  const jobs = [];
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && isCustomBackgroundIndex(sel.background)) continue;
     const url = resolveLayerUrl(key, sel[key]);
-    if (url) urls.push(url);
+    if (url) jobs.push(loadPreviewLayerImage(url).catch(() => null));
   }
-  await Promise.all(
-    urls.map((url) => getCachedImage(imageCache, url).catch(() => null)),
-  );
+  await Promise.all(jobs);
 }
 
 /**
@@ -1096,7 +1149,7 @@ async function refreshActiveStickerImage() {
     return;
   }
   try {
-    activeStickerImage = await getCachedImage(imageCache, url);
+    activeStickerImage = await loadPreviewLayerImage(url);
   } catch {
     activeStickerImage = null;
   }
@@ -1148,6 +1201,13 @@ const previewCanvas = /** @type {HTMLCanvasElement} */ (document.getElementById(
 const previewWrap = document.getElementById("previewWrap");
 const previewCtx = previewCanvas.getContext("2d");
 if (!previewCtx) throw new Error("2d context");
+
+function syncPreviewCanvasSize() {
+  previewRenderPx = previewCanvasPx();
+  previewCanvas.width = previewRenderPx;
+  previewCanvas.height = previewRenderPx;
+}
+syncPreviewCanvasSize();
 
 const tabsEl = document.getElementById("tabs");
 const stickerSubTabsEl = document.getElementById("stickerSubTabs");
@@ -1201,8 +1261,22 @@ function persistStickerOverlay() {
 }
 
 function applyActiveStickerImage() {
-  const url = activeStickerFullUrl();
-  activeStickerImage = url ? imageCache.get(url) ?? null : null;
+  const full = activeStickerFullUrl();
+  if (!full) {
+    activeStickerImage = null;
+    return;
+  }
+  const tier = displayTier();
+  if (tier === "high") {
+    activeStickerImage = imageCache.get(full) ?? null;
+    return;
+  }
+  const thumb = traitThumbUrl(full);
+  const maxDecode = maxDecodePxForPreview(tier);
+  activeStickerImage =
+    imageCache.get(thumb) ??
+    imageCache.get(displayCacheKey(full, maxDecode)) ??
+    null;
 }
 
 function syncStickerOverlayUi() {
@@ -1223,14 +1297,14 @@ function syncStickerOverlayUi() {
  * @param {StickerOverlay} o
  * @returns {{ w: number; h: number; cx: number; cy: number }}
  */
-function stickerOverlayLayout(o, stickerImg = activeStickerImage) {
+function stickerOverlayLayout(o, stickerImg = activeStickerImage, canvasPx = PREVIEW) {
   const img = stickerImg;
   if (!img?.naturalWidth) {
-    return { w: 0, h: 0, cx: o.x * PREVIEW, cy: o.y * PREVIEW };
+    return { w: 0, h: 0, cx: o.x * canvasPx, cy: o.y * canvasPx };
   }
-  const w = PREVIEW * o.scale;
+  const w = canvasPx * o.scale;
   const h = (img.naturalHeight / img.naturalWidth) * w;
-  return { w, h, cx: o.x * PREVIEW, cy: o.y * PREVIEW };
+  return { w, h, cx: o.x * canvasPx, cy: o.y * canvasPx };
 }
 
 /**
@@ -1242,10 +1316,10 @@ function stickerOverlayLayout(o, stickerImg = activeStickerImage) {
  * @param {StickerOverlay} o
  * @param {HTMLImageElement | null} [stickerImg]
  */
-function drawStickerOverlay(ctx, o, stickerImg = activeStickerImage) {
+function drawStickerOverlay(ctx, o, stickerImg = activeStickerImage, canvasPx = PREVIEW) {
   const img = stickerImg;
   if (o.index <= 0 || !img?.naturalWidth) return;
-  const { w, h, cx, cy } = stickerOverlayLayout(o, img);
+  const { w, h, cx, cy } = stickerOverlayLayout(o, img, canvasPx);
   const rad = (o.rotation * Math.PI) / 180;
   ctx.save();
   ctx.imageSmoothingEnabled = true;
@@ -1533,6 +1607,7 @@ function getInitialTheme() {
  * @param {LruImageCache} [cache]
  * @param {HTMLImageElement | null} [stickerImg]
  * @param {(cat: CategoryKey, index: number) => string | null} [resolveUrl]
+ * @param {{ size?: number; getLayerImage?: (cat: CategoryKey, selIndex: number, fullUrl: string | null) => HTMLImageElement | undefined; canvasPxForSticker?: number }} [drawOpts]
  */
 function drawComposite(
   ctx,
@@ -1540,34 +1615,43 @@ function drawComposite(
   cache = imageCache,
   stickerImg = activeStickerImage,
   resolveUrl = resolveLayerUrl,
+  drawOpts,
 ) {
-  ctx.clearRect(0, 0, PREVIEW, PREVIEW);
+  const size = drawOpts?.size ?? PREVIEW;
+  const getLayerImage = drawOpts?.getLayerImage;
+  const stickerCanvasPx = drawOpts?.canvasPxForSticker ?? size;
+
+  ctx.clearRect(0, 0, size, size);
 
   const hasCustomBg = isCustomBackgroundIndex(sel.background);
   const hasImageBg = sel.background > 0 && sel.background <= traitCatalog.background.length;
 
   if (!hasCustomBg && !hasImageBg && traitCatalog.background.length === 0) {
-    const grad = ctx.createLinearGradient(0, 0, PREVIEW, PREVIEW);
+    const grad = ctx.createLinearGradient(0, 0, size, size);
     grad.addColorStop(0, "#e0e7ff");
     grad.addColorStop(1, "#f5d0fe");
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, PREVIEW, PREVIEW);
+    ctx.fillRect(0, 0, size, size);
   }
 
   for (const key of COMPOSITE_ORDER) {
     if (key === "background" && hasCustomBg) {
       ctx.fillStyle = customBackgroundColor;
-      ctx.fillRect(0, 0, PREVIEW, PREVIEW);
+      ctx.fillRect(0, 0, size, size);
       continue;
     }
-    const url = resolveUrl(key, sel[key]);
-    const img = url ? cache.get(url) : undefined;
+    const fullUrl = resolveUrl(key, sel[key]);
+    const img = fullUrl
+      ? getLayerImage
+        ? getLayerImage(key, sel[key], fullUrl)
+        : cache.get(fullUrl)
+      : undefined;
     if (img) {
-      ctx.drawImage(img, 0, 0, PREVIEW, PREVIEW);
+      ctx.drawImage(img, 0, 0, size, size);
     }
   }
 
-  drawStickerOverlay(ctx, stickerOverlay, stickerImg);
+  drawStickerOverlay(ctx, stickerOverlay, stickerImg, stickerCanvasPx);
 }
 
 /**
@@ -1639,7 +1723,11 @@ async function renderPreview() {
   if (stickerOverlay.index > 0) {
     await refreshActiveStickerImage();
   }
-  drawComposite(previewCtx, selection);
+  drawComposite(previewCtx, selection, imageCache, activeStickerImage, resolveLayerUrl, {
+    size: previewRenderPx,
+    canvasPxForSticker: previewRenderPx,
+    getLayerImage: getPreviewLayerImageFromCache,
+  });
 }
 
 /**
@@ -1647,7 +1735,10 @@ async function renderPreview() {
  */
 function thumbCanvasPixelSize() {
   const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-  return Math.max(256, Math.round(THUMB * dpr * 2.5));
+  let px = Math.max(256, Math.round(THUMB * dpr * 2.5));
+  const cap = thumbBufferMaxPx();
+  if (cap) px = Math.min(px, cap);
+  return px;
 }
 
 function createThumbCanvas() {
@@ -1938,21 +2029,49 @@ function drawImageOnThumb(c, img, contain = false, crop = null, layout = "defaul
  * @returns {Promise<HTMLImageElement | null>}
  */
 async function loadThumbImage(thumbUrl, fallbackUrl) {
+  const maxDecode = maxDecodePxForPreview();
+  const loadOne = (/** @type {string} */ url) =>
+    maxDecode
+      ? getCachedImageForDisplay(imageCache, url, maxDecode)
+      : getCachedImage(imageCache, url);
+
   if (thumbUrl) {
     try {
-      return await getCachedImage(imageCache, thumbUrl);
+      return await loadOne(thumbUrl);
     } catch {
       /* try full size */
     }
   }
   if (fallbackUrl) {
     try {
-      return await getCachedImage(imageCache, fallbackUrl);
+      return await loadOne(fallbackUrl);
     } catch {
       return null;
     }
   }
   return null;
+}
+
+/**
+ * @param {string | null | undefined} thumbUrl
+ * @param {string | null | undefined} fullUrl
+ * @returns {HTMLImageElement | undefined}
+ */
+function thumbImageFromCache(thumbUrl, fullUrl) {
+  if (thumbUrl) {
+    const hit = imageCache.get(thumbUrl);
+    if (hit) return hit;
+  }
+  if (fullUrl) {
+    const hit = imageCache.get(fullUrl);
+    if (hit) return hit;
+    const maxDecode = maxDecodePxForPreview();
+    if (maxDecode) {
+      const capped = imageCache.get(displayCacheKey(fullUrl, maxDecode));
+      if (capped) return capped;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -1985,9 +2104,7 @@ function trySyncHydrateThumb(canvas, opts) {
   const paintKey = thumbPaintCacheKey(cacheUrl, layout);
   if (restorePaintedThumb(canvas, paintKey)) return true;
 
-  const cached =
-    (thumbUrl ? imageCache.get(thumbUrl) : undefined) ??
-    (fullUrl ? imageCache.get(fullUrl) : undefined);
+  const cached = thumbImageFromCache(thumbUrl, fullUrl);
   if (!cached?.naturalWidth) return false;
 
   let crop = null;
@@ -2032,9 +2149,7 @@ async function hydrateThumbButton(btn, token, getUrls) {
     return;
   }
 
-  const cached =
-    (thumbUrl ? imageCache.get(thumbUrl) : undefined) ??
-    (fullUrl ? imageCache.get(fullUrl) : undefined);
+  const cached = thumbImageFromCache(thumbUrl, fullUrl);
   if (cached?.naturalWidth) {
     await paint(cached);
     return;
@@ -2124,7 +2239,7 @@ async function onTraitThumbClick(cat, index) {
     return;
   }
   const url = resolveLayerUrl(cat, index);
-  if (url) await getCachedImage(imageCache, url).catch(() => null);
+  if (url) await loadPreviewLayerImage(url).catch(() => null);
   await renderPreview();
 }
 

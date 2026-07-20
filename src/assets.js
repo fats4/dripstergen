@@ -138,6 +138,22 @@ export function categoryThumbUrl(category, fullUrl) {
 }
 
 /**
+ * Thumbnail URL from any trait/sticker absolute path (`traits/<cat>/…`).
+ * @param {string} fullUrl
+ * @returns {string}
+ */
+export function traitThumbUrl(fullUrl) {
+  const marker = "/traits/";
+  const idx = fullUrl.indexOf(marker);
+  if (idx === -1) return fullUrl;
+  const rest = fullUrl.slice(idx + marker.length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0) return fullUrl;
+  const category = rest.slice(0, slash);
+  return categoryThumbUrl(category, fullUrl);
+}
+
+/**
  * @param {string} fullUrl
  * @returns {string}
  */

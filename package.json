@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "optimize-traits": "node scripts/optimize-traits.mjs",
     "optimize-traits:replace": "node scripts/optimize-traits.mjs --replace",
+    "generate-r2-thumbs": "node scripts/generate-r2-thumbs.mjs",
     "build:assets-manifest": "node scripts/build-assets-manifest.mjs",
     "prepare:r2": "node scripts/prepare-r2-upload.mjs",
     "prepare:r2:update": "node scripts/prepare-r2-upload.mjs --from=update",
