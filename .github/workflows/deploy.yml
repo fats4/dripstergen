@@ -58,8 +58,8 @@ jobs:
           mkdir -p dist/traits
           curl -fsSL "$VITE_ASSETS_BASE_URL/traits/_scan.json" -o dist/traits/_scan.json
           curl -fsSL "$VITE_ASSETS_BASE_URL/traits/_collab.json" -o dist/traits/_collab.json
-          node -e "const fs=require('fs');const s=JSON.parse(fs.readFileSync('dist/traits/_scan.json','utf8'));fs.writeFileSync('dist/traits/_monigga-stickers.json',JSON.stringify(s.monigga??[])+'\n');"
-          node -e "const j=require('./dist/traits/_scan.json');console.log('catalog',Object.fromEntries(Object.entries(j).map(([k,v])=>[k,v.length])), 'monigga', (j.monigga??[]).length)"
+          node -e "const fs=require('fs');const s=JSON.parse(fs.readFileSync('dist/traits/_scan.json','utf8'));fs.writeFileSync('dist/traits/_monigga-stickers.json',JSON.stringify(s.monigga??[])+'\n');fs.writeFileSync('dist/traits/_roarnads-stickers.json',JSON.stringify(s.roarnads??[])+'\n');"
+          node -e "const j=require('./dist/traits/_scan.json');console.log('catalog',Object.fromEntries(Object.entries(j).map(([k,v])=>[k,v.length])), 'monigga', (j.monigga??[]).length, 'roarnads', (j.roarnads??[]).length)"
 
       - uses: actions/upload-pages-artifact@v3
         with:
