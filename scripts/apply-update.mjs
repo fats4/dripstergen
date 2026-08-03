@@ -11,7 +11,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 
-const CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
+const CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga", "roarnads"];
+/** update/traits/<src>/ → public/traits/<dest>/ */
+const UPDATE_ALIASES = [{ src: "sticker", dest: "roarnads" }];
 const IMAGE_EXT = /\.(png|webp|jpe?g|svg)$/i;
 
 const dryRun = process.argv.includes("--dry-run");
@@ -24,16 +26,17 @@ if (!fs.existsSync(updateRoot)) {
 }
 
 let copied = 0;
-let skipped = 0;
 
-for (const cat of CATEGORIES) {
-  const srcDir = path.join(updateRoot, cat);
-  const destDir = path.join(publicRoot, cat);
-
-  if (!fs.existsSync(srcDir)) continue;
+/**
+ * @param {string} srcDir
+ * @param {string} destDir
+ * @param {string} label
+ */
+function copyUpdateCategory(srcDir, destDir, label) {
+  if (!fs.existsSync(srcDir)) return;
 
   const files = fs.readdirSync(srcDir).filter((f) => !f.startsWith(".") && IMAGE_EXT.test(f));
-  if (files.length === 0) continue;
+  if (files.length === 0) return;
 
   if (!dryRun) fs.mkdirSync(destDir, { recursive: true });
 
@@ -43,15 +46,31 @@ for (const cat of CATEGORIES) {
     if (!fs.statSync(src).isFile()) continue;
 
     if (dryRun) {
-      console.log(`[dry-run] ${cat}/${file}`);
+      console.log(`[dry-run] ${label}/${file}`);
       copied++;
       continue;
     }
 
     fs.copyFileSync(src, dest);
-    console.log(`copied ${cat}/${file}`);
+    console.log(`copied ${label}/${file}`);
     copied++;
   }
+}
+
+for (const cat of CATEGORIES) {
+  copyUpdateCategory(
+    path.join(updateRoot, cat),
+    path.join(publicRoot, cat),
+    cat,
+  );
+}
+
+for (const { src, dest } of UPDATE_ALIASES) {
+  copyUpdateCategory(
+    path.join(updateRoot, src),
+    path.join(publicRoot, dest),
+    `${src}→${dest}`,
+  );
 }
 
 if (copied === 0) {

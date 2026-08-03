@@ -14,7 +14,7 @@ import path from "node:path";
 import { S3Client, ListObjectsV2Command, PutObjectCommand } from "@aws-sdk/client-s3";
 import { allCollabBlockedFilenames, loadCollabBlockedFilenames } from "./collab-scan-filter.mjs";
 
-const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
+const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga", "roarnads"];
 const IMAGE_EXT = /\.(png|webp|jpe?g|svg)$/i;
 const includeCollab = process.argv.includes("--include-collab");
 const excludeMoniggaStickers = process.argv.includes("--exclude-monigga-stickers");

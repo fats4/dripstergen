@@ -14,7 +14,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 
-const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
+const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga", "roarnads"];
+/** update/traits/<src>/ → upload traits/<dest>/ */
+const UPLOAD_ALIASES = [{ src: "sticker", dest: "roarnads" }];
 const IMAGE_EXT = /\.(png|webp|jpe?g|svg)$/i;
 
 const outArg = process.argv.find((a) => a.startsWith("--out="));
@@ -33,13 +35,43 @@ if (!fs.existsSync(src)) {
 }
 
 let fileCount = 0;
-for (const cat of TRAIT_CATEGORIES) {
-  const dir = path.join(src, cat);
-  if (!fs.existsSync(dir)) continue;
-  fileCount += fs.readdirSync(dir).filter((f) => !f.startsWith(".") && IMAGE_EXT.test(f)).length;
+
+/**
+ * @param {string} srcDir
+ * @param {string} destDir
+ */
+function stageCategory(srcDir, destDir) {
+  if (!fs.existsSync(srcDir)) return;
+  const files = fs.readdirSync(srcDir).filter((f) => !f.startsWith(".") && IMAGE_EXT.test(f));
+  if (files.length === 0) return;
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const file of files) {
+    fs.copyFileSync(path.join(srcDir, file), path.join(destDir, file));
+    fileCount++;
+  }
 }
 
-if (fileCount === 0) {
+/**
+ * @param {string} root
+ * @returns {number}
+ */
+function countImages(root) {
+  let n = 0;
+  for (const cat of TRAIT_CATEGORIES) {
+    const dir = path.join(root, cat);
+    if (!fs.existsSync(dir)) continue;
+    n += fs.readdirSync(dir).filter((f) => !f.startsWith(".") && IMAGE_EXT.test(f)).length;
+  }
+  for (const { src: aliasSrc } of UPLOAD_ALIASES) {
+    const dir = path.join(root, aliasSrc);
+    if (!fs.existsSync(dir)) continue;
+    n += fs.readdirSync(dir).filter((f) => !f.startsWith(".") && IMAGE_EXT.test(f)).length;
+  }
+  return n;
+}
+
+const pending = countImages(src);
+if (pending === 0) {
   console.error(
     fromUpdate
       ? "prepare-r2-upload: update/traits/ is empty — add files to update/traits/<category>/ first."
@@ -49,7 +81,14 @@ if (fileCount === 0) {
 }
 
 fs.rmSync(outRoot, { recursive: true, force: true });
-fs.cpSync(src, dest, { recursive: true });
+fs.mkdirSync(dest, { recursive: true });
+
+for (const cat of TRAIT_CATEGORIES) {
+  stageCategory(path.join(src, cat), path.join(dest, cat));
+}
+for (const { src: aliasSrc, dest: aliasDest } of UPLOAD_ALIASES) {
+  stageCategory(path.join(src, aliasSrc), path.join(dest, aliasDest));
+}
 
 if (!fromUpdate) {
   const scanPath = path.join(dest, "_scan.json");
@@ -62,8 +101,6 @@ if (!fromUpdate) {
     console.warn("prepare-r2-upload: could not write _scan.json");
   }
 } else {
-  const scanPath = path.join(dest, "_scan.json");
-  if (fs.existsSync(scanPath)) fs.unlinkSync(scanPath);
   console.log("prepare-r2-upload: skipped _scan.json (incremental update — catalog rebuilt after upload)");
 }
 

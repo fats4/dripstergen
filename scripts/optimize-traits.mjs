@@ -18,7 +18,7 @@ const rootArg = process.argv.find((a) => a.startsWith("--root="));
 const TRAIT_ROOT = rootArg
   ? path.resolve(rootArg.split("=")[1])
   : path.join(process.cwd(), "public", "traits");
-const CATEGORIES = ["skin", "accessories", "frame", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
+const CATEGORIES = ["skin", "accessories", "frame", "clothes", "glasses", "hat", "background", "sticker", "monigga", "roarnads"];
 const SOURCE_EXT = /\.(png|jpg|jpeg)$/i;
 
 const args = process.argv.slice(2);

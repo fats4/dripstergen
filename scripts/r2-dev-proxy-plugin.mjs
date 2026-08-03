@@ -74,6 +74,36 @@ export function r2DevProxyPlugin(projectRoot) {
       const prefix = (process.env.R2_KEY_PREFIX ?? "traits").replace(/^\/+|\/+$/g, "");
       const IMAGE_EXT = /\.(png|webp|jpe?g|svg)$/i;
       const DEV_MONIGGA_STICKERS_PATH = "/traits/_dev-monigga-stickers.json";
+      const DEV_ROARNADS_STICKERS_PATH = "/traits/_dev-roarnads-stickers.json";
+
+      /**
+       * @param {string} category
+       * @returns {string[]}
+       */
+      function listLocalCategoryFilenames(category) {
+        const dir = path.join(projectRoot, "public", "traits", category);
+        if (!fs.existsSync(dir)) return [];
+        return fs
+          .readdirSync(dir)
+          .filter((f) => !f.startsWith(".") && IMAGE_EXT.test(f))
+          .sort((a, b) => a.localeCompare(b));
+      }
+
+      /**
+       * @param {string} jsonPath
+       * @param {string} category
+       */
+      async function serveDevStickerList(jsonPath, category) {
+        /** @type {string[]} */
+        let files = [];
+        try {
+          files = await listCategoryFilenames(client, bucket, prefix, category);
+        } catch {
+          /* R2 list failed */
+        }
+        if (files.length === 0) files = listLocalCategoryFilenames(category);
+        return files;
+      }
 
       /**
        * @param {S3Client} s3
@@ -110,7 +140,23 @@ export function r2DevProxyPlugin(projectRoot) {
         const pathOnly = req.url?.split("?")[0];
         if (pathOnly === DEV_MONIGGA_STICKERS_PATH) {
           try {
-            const files = await listCategoryFilenames(client, bucket, prefix, "monigga");
+            const files = await serveDevStickerList(DEV_MONIGGA_STICKERS_PATH, "monigga");
+            res.setHeader("Content-Type", "application/json");
+            res.setHeader("Cache-Control", "no-store");
+            if (req.method === "HEAD") {
+              res.statusCode = 200;
+              res.end();
+              return;
+            }
+            res.end(`${JSON.stringify(files)}\n`);
+          } catch {
+            next();
+          }
+          return;
+        }
+        if (pathOnly === DEV_ROARNADS_STICKERS_PATH) {
+          try {
+            const files = await serveDevStickerList(DEV_ROARNADS_STICKERS_PATH, "roarnads");
             res.setHeader("Content-Type", "application/json");
             res.setHeader("Cache-Control", "no-store");
             if (req.method === "HEAD") {
@@ -147,6 +193,7 @@ export function r2DevProxyPlugin(projectRoot) {
 
       console.log(`[r2-dev-proxy] /traits/* → R2 bucket "${bucket}"`);
       console.log(`[r2-dev-proxy] dev-only monigga stickers → ${DEV_MONIGGA_STICKERS_PATH}`);
+      console.log(`[r2-dev-proxy] dev-only roarnads stickers → ${DEV_ROARNADS_STICKERS_PATH}`);
     },
   };
 }

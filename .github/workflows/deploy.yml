@@ -45,6 +45,7 @@ jobs:
           VITE_IPFS_CID: ${{ secrets.VITE_IPFS_CID }}
           VITE_IPFS_GATEWAY: ${{ secrets.VITE_IPFS_GATEWAY }}
           VITE_ENABLE_MONIGGA_COLLAB: "true"
+          VITE_ENABLE_ROARNADS_STICKERS: "true"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

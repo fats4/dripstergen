@@ -95,20 +95,33 @@ export function isMoniggaStickersEnabled() {
   return isMoniggaCollabDefaultEnabled();
 }
 
-/** @typedef {'skrumpeys'|'monigga'} StickerSourceKey */
+/** RoarNads sticker sub-tab. Override: VITE_ENABLE_ROARNADS_STICKERS=true|false */
+export function isRoarnadsStickersEnabled() {
+  const flag = (import.meta.env.VITE_ENABLE_ROARNADS_STICKERS ?? "").trim().toLowerCase();
+  if (flag === "true" || flag === "1") return true;
+  if (flag === "false" || flag === "0") return false;
+  return import.meta.env.DEV;
+}
+
+/** @typedef {'skrumpeys'|'monigga'|'roarnads'} StickerSourceKey */
 
 /** @type {readonly StickerSourceKey[]} */
-export const STICKER_SOURCE_KEYS = ["skrumpeys", "monigga"];
+export const STICKER_SOURCE_KEYS = ["skrumpeys", "monigga", "roarnads"];
 
 /** @type {Record<StickerSourceKey, string>} */
 export const STICKER_SOURCE_LABELS = {
   skrumpeys: "skrumpeys",
   monigga: "monigga",
+  roarnads: "roarnads",
 };
 
 /** @returns {readonly StickerSourceKey[]} */
 export function getStickerSourceKeys() {
-  return isMoniggaStickersEnabled() ? STICKER_SOURCE_KEYS : ["skrumpeys"];
+  /** @type {StickerSourceKey[]} */
+  const keys = ["skrumpeys"];
+  if (isMoniggaStickersEnabled()) keys.push("monigga");
+  if (isRoarnadsStickersEnabled()) keys.push("roarnads");
+  return keys;
 }
 
 /** @typedef {CategoryKey | typeof STICKERS_TAB} PickerTabKey */
@@ -267,7 +280,7 @@ export function parseStoredStickerOverlay(raw) {
     index = 1;
   }
   const source =
-    o.source === "monigga" || o.source === "skrumpeys"
+    o.source === "monigga" || o.source === "skrumpeys" || o.source === "roarnads"
       ? /** @type {StickerSourceKey} */ (o.source)
       : base.source;
   return {

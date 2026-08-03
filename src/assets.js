@@ -73,6 +73,12 @@ export function traitsMoniggaStickersUrl() {
 }
 
 /** @returns {string} */
+export function traitsRoarnadsStickersUrl() {
+  if (usesRemoteAssets()) return "/traits/_roarnads-stickers.json";
+  return joinAssetPath("/traits/_roarnads-stickers.json");
+}
+
+/** @returns {string} */
 export function traitsCollabUrl() {
   if (usesRemoteAssets()) return "/traits/_collab.json";
   return joinAssetPath("/traits/_collab.json");

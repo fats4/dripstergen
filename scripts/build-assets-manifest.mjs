@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { filterCollabFromScan } from "./collab-scan-filter.mjs";
 
-const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
+const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga", "roarnads"];
 const TRAIT_EXT = /\.(png|webp|jpe?g|svg)$/i;
 
 const outArg = process.argv.find((a) => a.startsWith("--out="));

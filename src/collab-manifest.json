@@ -57,5 +57,13 @@
         "block": { "frame": ["mon_frame.webp"] }
       }
     ]
+  },
+  "roarnads": {
+    "label": "ROARNADS",
+    "accent": "#FF4757",
+    "traits": {
+      "hat": ["roarnads_hat.webp"]
+    },
+    "traitLocks": []
   }
 }

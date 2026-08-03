@@ -9,6 +9,7 @@ import {
   traitsScanUrl,
   traitsCollabUrl,
   traitsMoniggaStickersUrl,
+  traitsRoarnadsStickersUrl,
   usesRemoteAssets,
 } from "./assets.js";
 import {
@@ -41,6 +42,7 @@ import {
   STICKER_SOURCE_LABELS,
   getStickerSourceKeys,
   isMoniggaStickersEnabled,
+  isRoarnadsStickersEnabled,
   defaultCollabSelection,
   clampStickerOverlay,
   CUSTOM_BG_COLOR_STORAGE_KEY,
@@ -270,18 +272,21 @@ const traitCatalog = {
 const stickerCatalogBySource = {
   skrumpeys: [],
   monigga: [],
+  roarnads: [],
 };
 
 /** @type {Record<StickerSourceKey, Map<string, number>>} */
 const stickerIdToPickerIndexBySource = {
   skrumpeys: new Map(),
   monigga: new Map(),
+  roarnads: new Map(),
 };
 
 /** Scan/manifest category per sticker sub-tab */
 const STICKER_SOURCE_SCAN_KEY = {
   skrumpeys: "stickers",
   monigga: "monigga",
+  roarnads: "roarnads",
 };
 
 /** @type {CollabPartnerKey[]} */
@@ -470,10 +475,10 @@ function mergeCollabManifests(base, patch) {
       continue;
     }
     out[id] = {
-      label: typeof remote.label === "string" ? remote.label : local.label,
-      accent: typeof remote.accent === "string" ? remote.accent : local.accent,
+      label: typeof local.label === "string" ? local.label : remote.label,
+      accent: typeof local.accent === "string" ? local.accent : remote.accent,
       traits: { ...local.traits, ...remote.traits },
-      traitLocks: Array.isArray(remote.traitLocks) ? remote.traitLocks : local.traitLocks,
+      traitLocks: Array.isArray(local.traitLocks) ? local.traitLocks : remote.traitLocks,
     };
   }
   return out;
@@ -1361,6 +1366,7 @@ async function loadStickerCatalog() {
   const bySource = {
     skrumpeys: new Set(),
     monigga: new Set(),
+    roarnads: new Set(),
   };
   const enabledSources = getStickerSourceKeys();
 
@@ -1368,12 +1374,14 @@ async function loadStickerCatalog() {
     for (const p of Object.keys(traitGlobModules).sort()) {
       const skrumpeyMatch = p.match(/^\.\/traits\/stickers\/[^/]+$/i);
       const moniggaMatch = p.match(/^\.\/traits\/monigga\/[^/]+$/i);
-      if (!skrumpeyMatch && !moniggaMatch) continue;
+      const roarnadsMatch = p.match(/^\.\/traits\/roarnads\/[^/]+$/i);
+      if (!skrumpeyMatch && !moniggaMatch && !roarnadsMatch) continue;
       const raw = traitGlobModules[p];
       const url = typeof raw === "string" ? raw : moduleToUrl(raw);
       if (!url) continue;
       if (skrumpeyMatch) bySource.skrumpeys.add(url);
       if (moniggaMatch && enabledSources.includes("monigga")) bySource.monigga.add(url);
+      if (roarnadsMatch && enabledSources.includes("roarnads")) bySource.roarnads.add(url);
     }
   }
 
@@ -1438,6 +1446,28 @@ async function loadStickerCatalog() {
     }
   }
 
+  if (isRoarnadsStickersEnabled()) {
+    const roarnadsListUrls = import.meta.env.DEV
+      ? ["/traits/_dev-roarnads-stickers.json"]
+      : [traitsRoarnadsStickersUrl(), "/traits/_roarnads-stickers.json"];
+    for (const url of roarnadsListUrls) {
+      try {
+        const res = await fetch(url, { cache: usesRemoteAssets() ? "default" : "no-store" });
+        if (!res.ok) continue;
+        const list = await res.json();
+        if (!Array.isArray(list)) continue;
+        for (const name of list) {
+          if (typeof name === "string" && name) {
+            bySource.roarnads.add(stickerSourceAssetUrl("roarnads", name));
+          }
+        }
+        break;
+      } catch {
+        /* try next source */
+      }
+    }
+  }
+
   for (const source of STICKER_SOURCE_KEYS) {
     stickerCatalogBySource[source].length = 0;
     if (enabledSources.includes(source)) {
@@ -1453,6 +1483,9 @@ function syncStickerSourceAccess() {
     activeStickerSubTab = sources[0] ?? "skrumpeys";
   }
   if (!isMoniggaStickersEnabled() && stickerOverlay.source === "monigga") {
+    stickerOverlay = defaultStickerOverlay();
+  }
+  if (!isRoarnadsStickersEnabled() && stickerOverlay.source === "roarnads") {
     stickerOverlay = defaultStickerOverlay();
   }
 }

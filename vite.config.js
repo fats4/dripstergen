@@ -15,7 +15,7 @@ loadDotEnv(__dirname);
 const useR2TraitsInDev = shouldUseR2TraitsInDev(process.env);
 
 /** Matches trait categories in src/state.js (no import to keep config lightweight) */
-const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
+const TRAIT_CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga", "roarnads"];
 const TRAIT_EXT = /\.(png|webp|jpe?g|svg)$/i;
 
 /**
@@ -75,6 +75,13 @@ function traitsPublicScanPlugin(/** @type {{ devScan?: boolean; buildScan?: bool
           const body = JSON.stringify(scanPublicTraits(process.cwd()));
           res.setHeader("Content-Type", "application/json");
           res.end(body);
+          return;
+        }
+        if (pathOnly === "/traits/_dev-roarnads-stickers.json") {
+          const scan = scanPublicTraits(process.cwd());
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("Cache-Control", "no-store");
+          res.end(`${JSON.stringify(scan.roarnads ?? [])}\n`);
           return;
         }
         next();

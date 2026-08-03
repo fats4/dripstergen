@@ -14,7 +14,7 @@ const traitRoot = rootArg
   ? path.resolve(rootArg.split("=")[1])
   : path.join(process.cwd(), "update", "traits");
 
-const CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga"];
+const CATEGORIES = ["skin", "frame", "accessories", "clothes", "glasses", "hat", "background", "stickers", "monigga", "roarnads"];
 
 let renamed = 0;
 
