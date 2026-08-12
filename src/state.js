@@ -52,6 +52,7 @@ export const COLLAB_LAYER_KEYS = /** @type {readonly CategoryKey[]} */ ([
   "clothes",
   "hat",
   "accessories",
+  "background",
 ]);
 
 /** MONIGGA collab off in production by default; dev on. Opt-in: VITE_ENABLE_MONIGGA_COLLAB=true */
@@ -81,7 +82,7 @@ export function isCollabSkinEnabled() {
 /** @param {CategoryKey} cat */
 export function isCollabCategoryEnabled(cat) {
   if (cat === "skin") return isCollabSkinEnabled();
-  if (cat === "frame" || cat === "clothes" || cat === "hat" || cat === "accessories") {
+  if (cat === "frame" || cat === "clothes" || cat === "hat" || cat === "accessories" || cat === "background") {
     return isCollabTraitsEnabled();
   }
   return false;
@@ -145,12 +146,13 @@ export const PICKER_TAB_LABELS = {
  *   clothes: number;
  *   hat: number;
  *   accessories: number;
+ *   background: number;
  *   partner: Partial<Record<CollabLayerKey, string>>;
  * }} CollabSelection */
 
 /** @returns {CollabSelection} */
 export function defaultCollabSelection() {
-  return { skin: 0, frame: 0, clothes: 0, hat: 0, accessories: 0, partner: {} };
+  return { skin: 0, frame: 0, clothes: 0, hat: 0, accessories: 0, background: 0, partner: {} };
 }
 
 /** @typedef {Record<CategoryKey, number>} Counts */

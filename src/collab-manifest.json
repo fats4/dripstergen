@@ -65,5 +65,16 @@
       "hat": ["roarnads_hat.webp"]
     },
     "traitLocks": []
+  },
+  "deadnads": {
+    "label": "DEADNADS",
+    "accent": "#84CC16",
+    "traits": {
+      "skin": ["deadnads_base.webp"],
+      "clothes": ["deadnads_armor.webp"],
+      "hat": ["deadnads_hair.webp"],
+      "background": ["deadnads_background.webp"]
+    },
+    "traitLocks": []
   }
 }

@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const COLLAB_SCAN_CATEGORIES = ["skin", "frame", "clothes", "hat", "accessories"];
+export const COLLAB_SCAN_CATEGORIES = ["skin", "frame", "clothes", "hat", "accessories", "background"];
 
 /** @returns {Partial<Record<string, Set<string>>>} */
 export function loadCollabBlockedFilenames(projectRoot = process.cwd()) {

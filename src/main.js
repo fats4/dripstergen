@@ -297,7 +297,7 @@ let collabTraitLocks = {};
 /** @type {import('./state.js').CollabTraitLockRule[]} */
 const globalTraitLocks = Array.isArray(bundledTraitLocks) ? bundledTraitLocks : [];
 
-/** @type {Record<string, { label: string; accent: string; skin: string[]; frame: string[]; clothes: string[]; hat: string[]; accessories: string[] }>} */
+/** @type {Record<string, { label: string; accent: string; skin: string[]; frame: string[]; clothes: string[]; hat: string[]; accessories: string[]; background: string[] }>} */
 let collabCatalog = {};
 
 /** @type {Record<CategoryKey, Set<string>>} */
@@ -315,8 +315,9 @@ const collabFilenameSet = {
  * @typedef {{ collabId: CollabPartnerKey; category: CategoryKey; index: number; url: string; label: string }} CollabPickerEntry
  * @typedef {{ kind: "empty" }} EmptyPickerEntry
  * @typedef {{ kind: "regular"; index: number }} RegularPickerEntry
+ * @typedef {{ kind: "custom" }} CustomPickerEntry
  * @typedef {{ kind: "collab" } & CollabPickerEntry} CollabThumbEntry
- * @typedef {EmptyPickerEntry | RegularPickerEntry | CollabThumbEntry} CategoryPickerEntry
+ * @typedef {EmptyPickerEntry | RegularPickerEntry | CustomPickerEntry | CollabThumbEntry} CategoryPickerEntry
  */
 
 /** From `src/traits/<category>/*` — bundled by Vite (`?url` = stable URL string) */
@@ -535,8 +536,17 @@ async function applyCollabManifest(catalog) {
     if (!def || typeof def !== "object") continue;
     const label = typeof def.label === "string" ? def.label : id;
     const accent = typeof def.accent === "string" ? def.accent : "#a78bfa";
-    /** @type {{ label: string; accent: string; skin: string[]; frame: string[]; clothes: string[]; hat: string[]; accessories: string[] }} */
-    const partner = { label, accent, skin: [], frame: [], clothes: [], hat: [], accessories: [] };
+    /** @type {{ label: string; accent: string; skin: string[]; frame: string[]; clothes: string[]; hat: string[]; accessories: string[]; background: string[] }} */
+    const partner = {
+      label,
+      accent,
+      skin: [],
+      frame: [],
+      clothes: [],
+      hat: [],
+      accessories: [],
+      background: [],
+    };
 
     for (const cat of COLLAB_LAYER_KEYS) {
       const list = def.traits?.[cat];
@@ -805,7 +815,37 @@ function applyThumbLockUi(btn, locked) {
  * @param {CategoryKey} cat
  * @returns {CategoryPickerEntry[]}
  */
+function getBackgroundPickerEntries() {
+  /** @type {CategoryPickerEntry[]} */
+  const entries = [{ kind: "empty" }];
+  for (let i = 0; i < traitCatalog.background.length; i++) {
+    entries.push({ kind: "regular", index: i + 1 });
+  }
+  entries.push({ kind: "custom" });
+  if (isCollabCategoryEnabled("background")) {
+    for (const partnerId of collabPartnerKeys) {
+      const urls = collabCatalog[partnerId].background;
+      for (let i = 0; i < urls.length; i++) {
+        entries.push({
+          kind: "collab",
+          collabId: partnerId,
+          category: "background",
+          index: i + 1,
+          url: urls[i],
+          label: urlBasename(urls[i]).replace(/\.[^.]+$/i, ""),
+        });
+      }
+    }
+  }
+  return entries;
+}
+
+/**
+ * @param {CategoryKey} cat
+ * @returns {CategoryPickerEntry[]}
+ */
 function getCategoryPickerEntries(cat) {
+  if (cat === "background") return getBackgroundPickerEntries();
   /** @type {CategoryPickerEntry[]} */
   const entries = cat === "skin" ? [] : [{ kind: "empty" }];
   for (let i = 0; i < traitCatalog[cat].length; i++) {
@@ -846,6 +886,13 @@ function isCategoryEntrySelected(cat, entry) {
   if (entry.kind === "empty") {
     return selection[cat] === 0 && collabPickerIndex(cat) === 0;
   }
+  if (entry.kind === "custom") {
+    return (
+      cat === "background" &&
+      selection.background === getBackgroundCustomIndex() &&
+      collabPickerIndex(cat) === 0
+    );
+  }
   if (entry.kind === "regular") {
     return selection[cat] === entry.index && collabPickerIndex(cat) === 0;
   }
@@ -864,6 +911,10 @@ async function onCategoryEntryClick(cat, entry) {
   if (entry.kind === "empty") {
     selection = { ...selection, [cat]: 0 };
     clearCollabForCategory(cat);
+  } else if (entry.kind === "custom") {
+    clearCollabForCategory(cat);
+    selection = { ...selection, [cat]: getBackgroundCustomIndex() };
+    backgroundColorInput?.click();
   } else if (entry.kind === "regular") {
     clearCollabForCategory(cat);
     selection = { ...selection, [cat]: entry.index };
@@ -902,10 +953,25 @@ async function onCategoryEntryClick(cat, entry) {
 function createCategoryThumbButton(cat, entry, selected, token) {
   /** @type {HTMLButtonElement} */
   let btn;
+  const entryClick = () => onCategoryEntryClick(cat, entry);
   if (entry.kind === "empty") {
-    btn = createTraitThumbButton(cat, 0, selected, token);
+    btn = createTraitThumbButton(
+      cat,
+      0,
+      selected,
+      token,
+      COLLAB_LAYER_KEYS.includes(cat) ? entryClick : null,
+    );
   } else if (entry.kind === "regular") {
-    btn = createTraitThumbButton(cat, entry.index, selected, token);
+    btn = createTraitThumbButton(
+      cat,
+      entry.index,
+      selected,
+      token,
+      COLLAB_LAYER_KEYS.includes(cat) ? entryClick : null,
+    );
+  } else if (entry.kind === "custom") {
+    btn = createTraitThumbButton(cat, getBackgroundCustomIndex(), selected, token, entryClick);
   } else {
     btn = createCollabThumbButton(entry, selected, token);
   }
@@ -2203,9 +2269,10 @@ async function hydrateThumbButton(btn, token, getUrls) {
  * @param {number} index
  * @param {boolean} selected
  * @param {number} token
+ * @param {(() => void | Promise<void>) | null} [onClick]
  * @returns {HTMLButtonElement}
  */
-function createTraitThumbButton(cat, index, selected, token) {
+function createTraitThumbButton(cat, index, selected, token, onClick = null) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "thumb";
@@ -2249,7 +2316,8 @@ function createTraitThumbButton(cat, index, selected, token) {
   }
 
   btn.addEventListener("click", () => {
-    void onTraitThumbClick(cat, index);
+    if (onClick) void onClick();
+    else void onTraitThumbClick(cat, index);
   });
   return btn;
 }
@@ -2302,7 +2370,14 @@ function createCollabThumbButton(entry, selected, token) {
   const thumbLayout = /** @type {ThumbLayout} */ (
     entry.category === "clothes" ? "collab-clothes" : "default"
   );
-  const opts = { thumbUrl: null, fullUrl: entry.url, cropToContent: true, layout: thumbLayout };
+  const isBackground = entry.category === "background";
+  const opts = {
+    thumbUrl: null,
+    fullUrl: entry.url,
+    contain: isBackground,
+    cropToContent: !isBackground,
+    layout: thumbLayout,
+  };
   if (!trySyncHydrateThumb(canvas, opts)) {
     btn.classList.add("thumb--loading");
     void hydrateThumbButton(btn, token, () => opts);
@@ -2575,15 +2650,10 @@ function renderThumbs() {
   let count;
   /** @type {(i: number) => HTMLButtonElement} */
   let factory;
-  if (cat === "background") {
-    count = getCounts().background;
-    factory = (i) => createTraitThumbButton(cat, i, selection[cat] === i, token);
-  } else {
-    const entries = getCategoryPickerEntries(cat);
-    count = entries.length;
-    factory = (i) =>
-      createCategoryThumbButton(cat, entries[i], isCategoryEntrySelected(cat, entries[i]), token);
-  }
+  const entries = getCategoryPickerEntries(cat);
+  count = entries.length;
+  factory = (i) =>
+    createCategoryThumbButton(cat, entries[i], isCategoryEntrySelected(cat, entries[i]), token);
 
   if (count > VIRTUAL_THUMB_THRESHOLD) {
     mountVirtualThumbGrid(count, token, factory);
